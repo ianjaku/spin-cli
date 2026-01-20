@@ -1,0 +1,7 @@
+- fuse
+- rig `rig all`
+- ops
+- spin: `spin all` - `spin queue core remix`
+- stax
+- bin
+- run
