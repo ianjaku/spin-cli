@@ -98,6 +98,7 @@ Options:
   await ink.waitUntilExit();
   
   console.log('Goodbye!');
+  process.exit(0);
 }
 
 async function listCommand() {
