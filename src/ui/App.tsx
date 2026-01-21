@@ -13,7 +13,7 @@ interface AppProps {
 
 export function App({ manager }: AppProps) {
   const { exit } = useApp();
-  const { height } = useScreenSize();
+  const { height, width } = useScreenSize();
   
   const [instances, setInstances] = useState<RunnableInstance[]>(manager.getAll());
   const [activeIndex, setActiveIndex] = useState(0);
@@ -108,7 +108,7 @@ export function App({ manager }: AppProps) {
   const logViewerHeight = Math.max(5, height - 4);
   
   return (
-    <Box flexDirection="column" height={height}>
+    <Box flexDirection="column" height={height} width={width}>
       {/* Status bar at top */}
       <StatusBar instances={instances} activeId={activeId} />
       
@@ -116,6 +116,7 @@ export function App({ manager }: AppProps) {
       <LogViewer 
         instance={activeInstance} 
         height={logViewerHeight}
+        width={width}
         isActive={true}
       />
       

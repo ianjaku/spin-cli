@@ -5,10 +5,11 @@ import type { RunnableInstance } from '../types.js';
 interface LogViewerProps {
   instance: RunnableInstance | null;
   height: number;
+  width?: number;
   isActive: boolean;
 }
 
-export function LogViewer({ instance, height, isActive }: LogViewerProps) {
+export function LogViewer({ instance, height, width, isActive }: LogViewerProps) {
   const [scrollOffset, setScrollOffset] = useState(0);
   const [followMode, setFollowMode] = useState(true);
   
@@ -72,7 +73,8 @@ export function LogViewer({ instance, height, isActive }: LogViewerProps) {
     return (
       <Box 
         borderStyle="round" 
-        flexGrow={1} 
+        flexGrow={1}
+        width={width}
         flexDirection="column" 
         paddingX={1}
       >
@@ -88,6 +90,7 @@ export function LogViewer({ instance, height, isActive }: LogViewerProps) {
     <Box 
       borderStyle="round" 
       flexGrow={1} 
+      width={width}
       flexDirection="column"
       borderColor={isActive ? 'blue' : undefined}
     >
