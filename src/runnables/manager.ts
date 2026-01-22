@@ -100,6 +100,7 @@ export class RunnableManager extends EventEmitter<ManagerEvents> {
         FORCE_COLOR: '1', // Preserve colors in output
       },
       shell: true,
+      detached: true, // Create a new process group so we can kill the entire tree
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     
@@ -164,13 +165,23 @@ export class RunnableManager extends EventEmitter<ManagerEvents> {
         resolve();
       });
       
-      // Try graceful shutdown first
-      proc.kill('SIGTERM');
+      // Kill the entire process group (negative PID) for graceful shutdown.
+      // This ensures child processes spawned by the shell are also terminated.
+      try {
+        process.kill(-proc.pid!, 'SIGTERM');
+      } catch {
+        // Process group may not exist, fall back to killing just the process
+        proc.kill('SIGTERM');
+      }
       
       // Force kill after timeout
       setTimeout(() => {
         if (instance.process) {
-          proc.kill('SIGKILL');
+          try {
+            process.kill(-proc.pid!, 'SIGKILL');
+          } catch {
+            proc.kill('SIGKILL');
+          }
         }
       }, 5000);
     });

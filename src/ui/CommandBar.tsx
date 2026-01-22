@@ -18,6 +18,7 @@ const SHORTCUTS: Shortcut[] = [
   { key: 's', label: 'stop' },
   { key: 'a', label: 'start' },
   { key: 'q', label: 'quit' },
+  { key: '?', label: 'help' },
 ];
 
 export function CommandBar({ message }: CommandBarProps) {

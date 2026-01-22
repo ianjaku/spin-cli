@@ -9,19 +9,18 @@ export default defineConfig({
 
     next: shell("bun run dev", {
       cwd: "/home/ian/projects/manual/mtomanny/manny",
-      description: 'Next.js server',
       readyWhen: (output) => output.includes('Ready'),
     }),
 
     // Docker containers
     postgres: docker('postgres:15', {
-      description: 'PostgreSQL database',
       ports: ['5432:5432'],
       env: {
-        POSTGRES_USER: 'dev',
-        POSTGRES_PASSWORD: 'dev',
-        POSTGRES_DB: 'app',
+        POSTGRES_USER: 'postgres',
+        POSTGRES_PASSWORD: 'postgres',
+        POSTGRES_DB: 'manual_to_plg',
       },
+      volumes: ["data:/var/lib/postgresql/data"],
     }),
     
 

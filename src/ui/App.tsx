@@ -4,6 +4,7 @@ import { useScreenSize } from 'fullscreen-ink';
 import { StatusBar } from './StatusBar.js';
 import { LogViewer } from './LogViewer.js';
 import { CommandBar } from './CommandBar.js';
+import { HelpPopup } from './HelpPopup.js';
 import { RunnableManager } from '../runnables/manager.js';
 import type { RunnableInstance } from '../types.js';
 
@@ -18,6 +19,7 @@ export function App({ manager }: AppProps) {
   const [instances, setInstances] = useState<RunnableInstance[]>(manager.getAll());
   const [activeIndex, setActiveIndex] = useState(0);
   const [message, setMessage] = useState<string>();
+  const [showHelp, setShowHelp] = useState(false);
   
   const activeInstance = instances[activeIndex] ?? null;
   const activeId = activeInstance?.id ?? null;
@@ -45,6 +47,15 @@ export function App({ manager }: AppProps) {
   
   // Handle keyboard input
   useInput((input, key) => {
+    // Don't process other keys when help is open
+    if (showHelp) return;
+    
+    // ? - toggle help popup
+    if (input === '?') {
+      setShowHelp(true);
+      return;
+    }
+    
     // Number keys 1-9 to switch services
     const num = parseInt(input);
     if (num >= 1 && num <= 9 && num <= instances.length) {
@@ -117,11 +128,25 @@ export function App({ manager }: AppProps) {
         instance={activeInstance} 
         height={logViewerHeight}
         width={width}
-        isActive={true}
+        isActive={!showHelp}
       />
       
       {/* Command bar at bottom */}
       <CommandBar message={message} />
+      
+      {/* Help popup overlay */}
+      {showHelp && (
+        <Box 
+          position="absolute" 
+          flexDirection="column"
+          alignItems="center"
+          justifyContent="center"
+          height={height}
+          width={width}
+        >
+          <HelpPopup onClose={() => setShowHelp(false)} width={width} height={height} />
+        </Box>
+      )}
     </Box>
   );
 }
