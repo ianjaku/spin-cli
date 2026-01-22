@@ -2,6 +2,7 @@ import { createJiti } from 'jiti';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { SpinConfig } from '../types.js';
+import { ScriptRegistry } from '../scripts/registry.js';
 
 const CONFIG_NAMES = [
   'spin.config.ts',
@@ -46,6 +47,14 @@ export async function loadConfig(cwd: string = process.cwd()): Promise<SpinConfi
       `Failed to load config from ${configPath}:\n${error instanceof Error ? error.message : error}`
     );
   }
+}
+
+/**
+ * Create a ScriptRegistry from the config's script sources.
+ * The registry is created but not initialized - init() is called lazily.
+ */
+export function createScriptRegistry(config: SpinConfig): ScriptRegistry {
+  return new ScriptRegistry(config.scripts || []);
 }
 
 /**

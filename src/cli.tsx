@@ -1,8 +1,9 @@
 import React from 'react';
 import { withFullScreen } from 'fullscreen-ink';
 import { App } from './ui/App.js';
-import { loadConfig, resolveTargets } from './config/loader.js';
+import { loadConfig, resolveTargets, createScriptRegistry } from './config/loader.js';
 import { RunnableManager } from './runnables/manager.js';
+import { defaultShellCommands } from './scripts/helpers.js';
 
 async function main() {
   const args = process.argv.slice(2);
@@ -87,8 +88,20 @@ Options:
   const manager = new RunnableManager(config);
   manager.init(targets);
   
+  // Create script registry (lazy initialization on first palette open)
+  const registry = createScriptRegistry(config);
+  
+  // Get shell commands from config or use defaults
+  const shellCommands = config.shellCommands || defaultShellCommands;
+  
   // Start the TUI
-  const ink = withFullScreen(<App manager={manager} />);
+  const ink = withFullScreen(
+    <App 
+      manager={manager} 
+      registry={registry}
+      shellCommands={shellCommands}
+    />
+  );
   await ink.start();
   
   // Start all services
