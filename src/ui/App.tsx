@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Box, useApp, useInput } from 'ink';
+import { Box, Text, useApp, useInput } from 'ink';
 import { useScreenSize } from 'fullscreen-ink';
 import { StatusBar } from './StatusBar.js';
 import { LogViewer } from './LogViewer.js';
@@ -12,7 +12,7 @@ import { ScriptRegistry } from '../scripts/registry.js';
 import { ScriptRunner } from '../scripts/runner.js';
 import { CommandHistory } from '../scripts/history.js';
 import { defaultShellCommands } from '../scripts/helpers.js';
-import type { RunnableInstance } from '../types.js';
+import { createManagerStore, ManagerStoreProvider } from '../state/managerStore.js';
 
 type AppMode = 'normal' | 'help' | 'palette' | 'output';
 
@@ -26,7 +26,8 @@ export function App({ manager, registry, shellCommands = defaultShellCommands }:
   const { exit } = useApp();
   const { height, width } = useScreenSize();
   
-  const [instances, setInstances] = useState<RunnableInstance[]>(manager.getAll());
+  const [managerStore] = useState(() => createManagerStore(manager));
+  const instances = managerStore.useStore(state => state.instances);
   const [activeIndex, setActiveIndex] = useState(0);
   const [message, setMessage] = useState<string>();
   const [mode, setMode] = useState<AppMode>('normal');
@@ -54,20 +55,9 @@ export function App({ manager, registry, shellCommands = defaultShellCommands }:
     return activeInstance?.definition.cwd || process.cwd();
   }, [activeInstance]);
   
-  // Subscribe to manager events
   useEffect(() => {
-    const updateInstances = () => {
-      setInstances([...manager.getAll()]);
-    };
-    
-    manager.on('status-change', updateInstances);
-    manager.on('output', updateInstances);
-    
-    return () => {
-      manager.off('status-change', updateInstances);
-      manager.off('output', updateInstances);
-    };
-  }, [manager]);
+    return () => managerStore.dispose();
+  }, [managerStore]);
   
   // Subscribe to script runner events
   useEffect(() => {
@@ -237,13 +227,15 @@ export function App({ manager, registry, shellCommands = defaultShellCommands }:
   const logViewerHeight = Math.max(5, height - 4);
   
   return (
-    <Box flexDirection="column" height={height} width={width}>
+    <ManagerStoreProvider store={managerStore}>
+      <Box flexDirection="column" height={height} width={width}>
       {/* Status bar at top */}
       <StatusBar instances={instances} activeId={activeId} />
       
       {/* Log viewer takes remaining space */}
       <LogViewer 
         instance={activeInstance} 
+        manager={manager}
         height={logViewerHeight}
         width={width}
         isActive={mode === 'normal'}
@@ -268,25 +260,40 @@ export function App({ manager, registry, shellCommands = defaultShellCommands }:
       
       {/* Command palette overlay */}
       {mode === 'palette' && (
-        <Box 
-          position="absolute" 
-          flexDirection="column"
-          alignItems="center"
-          justifyContent="center"
-          height={height}
-          width={width}
-        >
-          <CommandPalette
-            scripts={registry.getAll()}
-            shellCommands={shellCommands}
-            history={history.getAll()}
-            cwd={paletteCwd}
-            width={width}
+        <Box flexDirection="column" width={width} height={height} position="absolute">
+          {/* Backdrop layer */}
+          <Box 
+            position="absolute" 
+            flexDirection="column" 
+            width={width} 
             height={height}
-            onRun={handleRunCommand}
-            onClose={() => setMode('normal')}
-            onSearch={handleSearch}
-          />
+          >
+            {Array.from({ length: height }).map((_, i) => (
+              <Text key={i} backgroundColor="black">{' '.repeat(width)}</Text>
+            ))}
+          </Box>
+          
+          {/* Centered content */}
+          <Box 
+            position="absolute" 
+            flexDirection="column"
+            alignItems="center"
+            justifyContent="center"
+            height={height}
+            width={width}
+          >
+            <CommandPalette
+              scripts={registry.getAll()}
+              shellCommands={shellCommands}
+              history={history.getAll()}
+              cwd={paletteCwd}
+              width={width}
+              height={height}
+              onRun={handleRunCommand}
+              onClose={() => setMode('normal')}
+              onSearch={handleSearch}
+            />
+          </Box>
         </Box>
       )}
       
@@ -315,6 +322,7 @@ export function App({ manager, registry, shellCommands = defaultShellCommands }:
           />
         </Box>
       )}
-    </Box>
+      </Box>
+    </ManagerStoreProvider>
   );
 }

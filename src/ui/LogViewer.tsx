@@ -1,19 +1,28 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Box, Text, useInput } from 'ink';
+import type { RunnableManager } from '../runnables/manager.js';
 import type { RunnableInstance } from '../types.js';
+import { useManagerStore } from '../state/managerStore.js';
 
 interface LogViewerProps {
   instance: RunnableInstance | null;
+  manager: RunnableManager;
   height: number;
   width?: number;
   isActive: boolean;
 }
 
-export function LogViewer({ instance, height, width, isActive }: LogViewerProps) {
+export function LogViewer({ instance, manager, height, width, isActive }: LogViewerProps) {
   const [scrollOffset, setScrollOffset] = useState(0);
   const [followMode, setFollowMode] = useState(true);
   
-  const lines = instance?.output ?? [];
+  const outputTick = useManagerStore(state =>
+    instance ? (state.outputTicks[instance.id] ?? 0) : 0
+  );
+  const lines = useMemo(() => {
+    if (!instance) return [];
+    return manager.getOutputLines(instance.id, 'all');
+  }, [instance?.id, manager, outputTick]);
   const visibleLines = height - 2; // Account for border
   
   // Auto-scroll to bottom when new output arrives (if in follow mode)

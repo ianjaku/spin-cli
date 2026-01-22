@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { OutputBuffer } from './outputBuffer.js';
 import type { 
   SpinConfig, 
   RunnableDefinition, 
@@ -17,10 +18,14 @@ interface ManagerEvents {
 export class RunnableManager extends EventEmitter<ManagerEvents> {
   private instances: Map<string, RunnableInstance> = new Map();
   private config: SpinConfig;
+  private outputBuffers: Map<string, { stdout: OutputBuffer; stderr: OutputBuffer; output: OutputBuffer }> = new Map();
+  private maxOutputLines: number;
+  private readyCheckTimers: Map<string, NodeJS.Timeout> = new Map();
   
   constructor(config: SpinConfig) {
     super();
     this.config = config;
+    this.maxOutputLines = this.config.defaults?.maxOutputLines ?? MAX_OUTPUT_LINES;
   }
   
   /**
@@ -45,7 +50,7 @@ export class RunnableManager extends EventEmitter<ManagerEvents> {
       const definition = this.config.runnables[id];
       if (!definition) continue;
       
-      this.instances.set(id, {
+      const instance = {
         id,
         definition: {
           ...definition,
@@ -53,10 +58,11 @@ export class RunnableManager extends EventEmitter<ManagerEvents> {
         },
         status: 'stopped',
         process: null,
-        stdout: [],
-        stderr: [],
-        output: [],
-      });
+      } as RunnableInstance;
+
+      this.instances.set(id, instance);
+      this.outputBuffers.set(id, this.createOutputBuffers());
+      this.attachOutputGetters(instance);
     }
   }
   
@@ -83,10 +89,13 @@ export class RunnableManager extends EventEmitter<ManagerEvents> {
     this.setStatus(id, 'starting');
     
     // Clear previous output
-    instance.stdout = [];
-    instance.stderr = [];
-    instance.output = [];
+    this.clearOutputBuffers(id);
     instance.error = undefined;
+    const existingTimer = this.readyCheckTimers.get(id);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+      this.readyCheckTimers.delete(id);
+    }
     
     // Spawn the process
     const [cmd, ...args] = definition.command.split(' ');
@@ -228,36 +237,111 @@ export class RunnableManager extends EventEmitter<ManagerEvents> {
     const instance = this.instances.get(id);
     if (!instance) return;
     
-    const maxLines = this.config.defaults?.maxOutputLines ?? MAX_OUTPUT_LINES;
+    const buffers = this.outputBuffers.get(id);
+    if (!buffers) return;
     
     // Add to respective stream
     if (stream === 'stdout') {
-      instance.stdout.push(line);
-      if (instance.stdout.length > maxLines) {
-        instance.stdout.shift();
-      }
+      buffers.stdout.push(line);
     } else {
-      instance.stderr.push(line);
-      if (instance.stderr.length > maxLines) {
-        instance.stderr.shift();
-      }
+      buffers.stderr.push(line);
     }
     
     // Add to combined output
-    instance.output.push(line);
-    if (instance.output.length > maxLines) {
-      instance.output.shift();
-    }
+    buffers.output.push(line);
     
     // Emit event
     this.emit('output', id, line, stream);
     
-    // Check readyWhen
+    // Check readyWhen immediately after new output
     if (instance.status === 'starting' && instance.definition.readyWhen) {
-      const allOutput = instance.output.join('\n');
+      const allOutput = this.getOutputLines(id, 'all').join('\n');
       if (instance.definition.readyWhen(allOutput)) {
         this.setStatus(id, 'running');
       }
     }
+  }
+
+  getOutputLines(
+    id: string,
+    stream: 'stdout' | 'stderr' | 'all' = 'all',
+    limit?: number
+  ): string[] {
+    const buffers = this.outputBuffers.get(id);
+    if (!buffers) return [];
+
+    const buffer = stream === 'stdout'
+      ? buffers.stdout
+      : stream === 'stderr'
+        ? buffers.stderr
+        : buffers.output;
+
+    if (typeof limit === 'number') {
+      return buffer.tail(limit);
+    }
+
+    return buffer.toArray();
+  }
+
+  getOutputLength(id: string, stream: 'stdout' | 'stderr' | 'all' = 'all'): number {
+    const buffers = this.outputBuffers.get(id);
+    if (!buffers) return 0;
+
+    if (stream === 'stdout') return buffers.stdout.length;
+    if (stream === 'stderr') return buffers.stderr.length;
+    return buffers.output.length;
+  }
+
+  private createOutputBuffers(): { stdout: OutputBuffer; stderr: OutputBuffer; output: OutputBuffer } {
+    return {
+      stdout: new OutputBuffer(this.maxOutputLines),
+      stderr: new OutputBuffer(this.maxOutputLines),
+      output: new OutputBuffer(this.maxOutputLines),
+    };
+  }
+
+  private clearOutputBuffers(id: string): void {
+    const buffers = this.outputBuffers.get(id);
+    if (!buffers) return;
+    buffers.stdout.clear();
+    buffers.stderr.clear();
+    buffers.output.clear();
+  }
+
+  private attachOutputGetters(instance: RunnableInstance): void {
+    const id = instance.id;
+    Object.defineProperties(instance, {
+      stdout: {
+        enumerable: true,
+        get: () => this.getOutputLines(id, 'stdout'),
+      },
+      stderr: {
+        enumerable: true,
+        get: () => this.getOutputLines(id, 'stderr'),
+      },
+      output: {
+        enumerable: true,
+        get: () => this.getOutputLines(id, 'all'),
+      },
+    });
+  }
+
+  private scheduleReadyCheck(id: string): void {
+    if (this.readyCheckTimers.has(id)) return;
+
+    const timer = setTimeout(() => {
+      this.readyCheckTimers.delete(id);
+      const instance = this.instances.get(id);
+      if (!instance || instance.status !== 'starting' || !instance.definition.readyWhen) {
+        return;
+      }
+
+      const allOutput = this.getOutputLines(id, 'all').join('\n');
+      if (instance.definition.readyWhen(allOutput)) {
+        this.setStatus(id, 'running');
+      }
+    }, 50);
+
+    this.readyCheckTimers.set(id, timer);
   }
 }

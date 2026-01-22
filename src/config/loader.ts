@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { SpinConfig } from '../types.js';
 import { ScriptRegistry } from '../scripts/registry.js';
+import { ensureSpinFolder } from '../spin-folder/index.js';
 
 const CONFIG_NAMES = [
   'spin.config.ts',
@@ -14,6 +15,10 @@ const CONFIG_NAMES = [
  * Find and load the spin config file from the current directory.
  */
 export async function loadConfig(cwd: string = process.cwd()): Promise<SpinConfig> {
+  // Ensure .spin/cli.ts exists if the config uses it
+  // This must happen BEFORE loading config so imports resolve
+  ensureSpinFolder(cwd);
+  
   // Find config file
   let configPath: string | null = null;
   
@@ -28,7 +33,8 @@ export async function loadConfig(cwd: string = process.cwd()): Promise<SpinConfi
   if (!configPath) {
     throw new Error(
       `Could not find spin config file. Create one of:\n` +
-      CONFIG_NAMES.map(n => `  - ${n}`).join('\n')
+      CONFIG_NAMES.map(n => `  - ${n}`).join('\n') +
+      `\n\nOr run 'spin init' to create one.`
     );
   }
   

@@ -42,11 +42,11 @@ export interface RunnableInstance {
   status: RunnableStatus;
   /** Child process (if running) */
   process: ChildProcess | null;
-  /** Captured stdout lines */
+  /** Captured stdout lines (snapshot) */
   stdout: string[];
-  /** Captured stderr lines */
+  /** Captured stderr lines (snapshot) */
   stderr: string[];
-  /** Combined output (stdout + stderr interleaved) */
+  /** Combined output (stdout + stderr interleaved, snapshot) */
   output: string[];
   /** Error message (if status is 'error') */
   error?: string;
