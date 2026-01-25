@@ -9,12 +9,14 @@ export default defineConfig({
     packageScripts(),
   ],
   runnables: {
-    
 
-    next: shell("bun run dev", {
-      cwd: "/home/ian/projects/manual/mtomanny/manny",
-      readyWhen: (output) => output.includes('Ready'),
-      dependsOn: ["postgres"]
+    ngrok: shell("ngrok http 3000", {
+      readyWhen: (output) => output.includes('Forwarding'),
+      onReady: ({ output, setEnv }) => {
+        const url = output.match(/https:\/\/[^\s]+\.ngrok\.io/)?.[0];
+        if (!url) throw new Error('No ngrok URL found');
+        setEnv('NGROK_URL', url);
+      },
     }),
 
     // Docker containers
@@ -27,6 +29,13 @@ export default defineConfig({
       },
       volumes: ["data:/var/lib/postgresql/data"],
     }),
+    
+    next: shell("bun run dev", {
+      cwd: "/home/ian/projects/manual/mtomanny/manny",
+      readyWhen: (output) => output.includes('Ready'),
+      dependsOn: ["postgres"]
+    }),
+
     
 
 
