@@ -11,6 +11,7 @@ export type {
   RunnableStatus,
   ShellOptions,
   DockerOptions,
+  OnReadyContext,
   // Script types
   ResolvedScript,
   ScriptSource,

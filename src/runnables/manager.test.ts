@@ -310,6 +310,8 @@ describe('RunnableManager', () => {
       
       // Simulate ready output
       mockProcess.stdout.emit('data', Buffer.from('Ready on port 3000\n'));
+      // Wait for async onReady invocation to complete
+      await new Promise(resolve => setImmediate(resolve));
       expect(manager.get('api')?.status).toBe('running');
     });
 
@@ -931,6 +933,346 @@ describe('RunnableManager', () => {
       
       // Now api should auto-start via dependency watcher
       expect(['starting', 'running']).toContain(manager.get('api')?.status);
+    });
+  });
+
+  describe('hidden services (sleeping pattern)', () => {
+    it('initializes all services with hidden=true', () => {
+      const config = createConfig({
+        api: { type: 'shell', command: 'npm run dev' },
+        web: { type: 'shell', command: 'npm run start' },
+      });
+      
+      const manager = new RunnableManager(config);
+      manager.init(['api', 'web']);
+      
+      expect(manager.get('api')?.hidden).toBe(true);
+      expect(manager.get('web')?.hidden).toBe(true);
+    });
+
+    it('unhides services when startAll(ids) is called', async () => {
+      vi.useFakeTimers();
+      
+      const config = createConfig({
+        api: { type: 'shell', command: 'npm run dev' },
+        web: { type: 'shell', command: 'npm run start' },
+        db: { type: 'shell', command: 'docker-compose up' },
+      });
+      
+      const manager = new RunnableManager(config);
+      manager.init(['api', 'web', 'db']);
+      
+      // Start only api and web
+      manager.startAll(['api', 'web']);
+      await vi.advanceTimersByTimeAsync(0);
+      
+      // api and web should be unhidden
+      expect(manager.get('api')?.hidden).toBe(false);
+      expect(manager.get('web')?.hidden).toBe(false);
+      // db should remain hidden
+      expect(manager.get('db')?.hidden).toBe(true);
+      
+      vi.useRealTimers();
+    });
+
+    it('unhides dependencies when startAll(ids) is called with dependent service', async () => {
+      vi.useFakeTimers();
+      
+      const config = createConfig({
+        db: { type: 'shell', command: 'docker-compose up db' },
+        api: { type: 'shell', command: 'npm run dev', dependsOn: ['db'] },
+        web: { type: 'shell', command: 'npm run start' },
+      });
+      
+      const manager = new RunnableManager(config);
+      manager.init(['db', 'api', 'web']);
+      
+      // Start only api (which depends on db)
+      manager.startAll(['api']);
+      await vi.advanceTimersByTimeAsync(0);
+      
+      // Both api and db should be unhidden
+      expect(manager.get('api')?.hidden).toBe(false);
+      expect(manager.get('db')?.hidden).toBe(false);
+      // web should remain hidden
+      expect(manager.get('web')?.hidden).toBe(true);
+      
+      vi.useRealTimers();
+    });
+
+    it('emits hidden-change event when service is unhidden', async () => {
+      vi.useFakeTimers();
+      
+      const config = createConfig({
+        api: { type: 'shell', command: 'npm run dev' },
+      });
+      
+      const manager = new RunnableManager(config);
+      manager.init(['api']);
+      
+      const hiddenChanges: Array<{ id: string; hidden: boolean }> = [];
+      manager.on('hidden-change', (id, hidden) => {
+        hiddenChanges.push({ id, hidden });
+      });
+      
+      manager.startAll(['api']);
+      await vi.advanceTimersByTimeAsync(0);
+      
+      expect(hiddenChanges).toContainEqual({ id: 'api', hidden: false });
+      
+      vi.useRealTimers();
+    });
+
+    it('start() unhides the service', async () => {
+      const config = createConfig({
+        api: { type: 'shell', command: 'npm run dev' },
+      });
+      
+      const manager = new RunnableManager(config);
+      manager.init(['api']);
+      
+      expect(manager.get('api')?.hidden).toBe(true);
+      
+      await manager.start('api');
+      
+      expect(manager.get('api')?.hidden).toBe(false);
+    });
+
+    it('getHiddenServices returns only hidden services', () => {
+      const config = createConfig({
+        api: { type: 'shell', command: 'npm run dev' },
+        web: { type: 'shell', command: 'npm run start' },
+        db: { type: 'shell', command: 'docker-compose up' },
+      });
+      
+      const manager = new RunnableManager(config);
+      manager.init(['api', 'web', 'db']);
+      
+      // All hidden initially
+      expect(manager.getHiddenServices()).toHaveLength(3);
+      
+      // Manually unhide api
+      manager.start('api');
+      
+      const hidden = manager.getHiddenServices();
+      expect(hidden).toHaveLength(2);
+      expect(hidden.map(s => s.id)).not.toContain('api');
+    });
+
+    it('getVisibleServices returns only non-hidden services', () => {
+      const config = createConfig({
+        api: { type: 'shell', command: 'npm run dev' },
+        web: { type: 'shell', command: 'npm run start' },
+        db: { type: 'shell', command: 'docker-compose up' },
+      });
+      
+      const manager = new RunnableManager(config);
+      manager.init(['api', 'web', 'db']);
+      
+      // None visible initially
+      expect(manager.getVisibleServices()).toHaveLength(0);
+      
+      // Start api (unhides it)
+      manager.start('api');
+      
+      const visible = manager.getVisibleServices();
+      expect(visible).toHaveLength(1);
+      expect(visible[0].id).toBe('api');
+    });
+  });
+
+  describe('getTransitiveDependencies', () => {
+    it('returns the service itself when no dependencies', () => {
+      const config = createConfig({
+        api: { type: 'shell', command: 'npm run dev' },
+      });
+      
+      const manager = new RunnableManager(config);
+      manager.init(['api']);
+      
+      const deps = manager.getTransitiveDependencies(['api']);
+      expect(deps).toEqual(['api']);
+    });
+
+    it('returns direct dependencies', () => {
+      const config = createConfig({
+        db: { type: 'shell', command: 'docker-compose up db' },
+        api: { type: 'shell', command: 'npm run dev', dependsOn: ['db'] },
+      });
+      
+      const manager = new RunnableManager(config);
+      manager.init(['db', 'api']);
+      
+      const deps = manager.getTransitiveDependencies(['api']);
+      expect(deps).toContain('api');
+      expect(deps).toContain('db');
+      expect(deps).toHaveLength(2);
+    });
+
+    it('returns transitive dependencies', () => {
+      const config = createConfig({
+        db: { type: 'shell', command: 'docker-compose up db' },
+        cache: { type: 'shell', command: 'docker-compose up redis', dependsOn: ['db'] },
+        api: { type: 'shell', command: 'npm run dev', dependsOn: ['cache'] },
+      });
+      
+      const manager = new RunnableManager(config);
+      manager.init(['db', 'cache', 'api']);
+      
+      const deps = manager.getTransitiveDependencies(['api']);
+      expect(deps).toContain('api');
+      expect(deps).toContain('cache');
+      expect(deps).toContain('db');
+      expect(deps).toHaveLength(3);
+    });
+
+    it('handles multiple starting services', () => {
+      const config = createConfig({
+        db: { type: 'shell', command: 'docker-compose up db' },
+        api: { type: 'shell', command: 'npm run dev', dependsOn: ['db'] },
+        web: { type: 'shell', command: 'npm run start', dependsOn: ['db'] },
+      });
+      
+      const manager = new RunnableManager(config);
+      manager.init(['db', 'api', 'web']);
+      
+      const deps = manager.getTransitiveDependencies(['api', 'web']);
+      expect(deps).toContain('api');
+      expect(deps).toContain('web');
+      expect(deps).toContain('db');
+      expect(deps).toHaveLength(3);
+    });
+
+    it('does not duplicate dependencies', () => {
+      const config = createConfig({
+        db: { type: 'shell', command: 'docker-compose up db' },
+        api: { type: 'shell', command: 'npm run dev', dependsOn: ['db'] },
+        web: { type: 'shell', command: 'npm run start', dependsOn: ['db'] },
+      });
+      
+      const manager = new RunnableManager(config);
+      manager.init(['db', 'api', 'web']);
+      
+      const deps = manager.getTransitiveDependencies(['api', 'web']);
+      const dbCount = deps.filter(d => d === 'db').length;
+      expect(dbCount).toBe(1);
+    });
+  });
+
+  describe('getTopologicalOrderFor', () => {
+    it('returns correct order for subset with dependencies', () => {
+      const config = createConfig({
+        db: { type: 'shell', command: 'docker-compose up db' },
+        api: { type: 'shell', command: 'npm run dev', dependsOn: ['db'] },
+        web: { type: 'shell', command: 'npm run start' },
+      });
+      
+      const manager = new RunnableManager(config);
+      manager.init(['db', 'api', 'web']);
+      
+      const order = manager.getTopologicalOrderFor(['api']);
+      
+      // Should include api and db in correct order
+      expect(order).toHaveLength(2);
+      expect(order).toContain('api');
+      expect(order).toContain('db');
+      // db should come before api
+      expect(order.indexOf('db')).toBeLessThan(order.indexOf('api'));
+      // web should not be included
+      expect(order).not.toContain('web');
+    });
+
+    it('returns correct order for deep dependency chain', () => {
+      const config = createConfig({
+        db: { type: 'shell', command: 'cmd' },
+        cache: { type: 'shell', command: 'cmd', dependsOn: ['db'] },
+        api: { type: 'shell', command: 'cmd', dependsOn: ['cache'] },
+      });
+      
+      const manager = new RunnableManager(config);
+      manager.init(['db', 'cache', 'api']);
+      
+      const order = manager.getTopologicalOrderFor(['api']);
+      
+      expect(order).toHaveLength(3);
+      expect(order.indexOf('db')).toBeLessThan(order.indexOf('cache'));
+      expect(order.indexOf('cache')).toBeLessThan(order.indexOf('api'));
+    });
+  });
+
+  describe('startWithDependencies', () => {
+    it('starts a service and its dependencies', async () => {
+      vi.useFakeTimers();
+      
+      const mockProc1 = createMockProcess();
+      const mockProc2 = createMockProcess();
+      mockProc2.pid = 12346;
+      
+      vi.mocked(spawn)
+        .mockReturnValueOnce(mockProc1)
+        .mockReturnValueOnce(mockProc2);
+      
+      const config = createConfig({
+        db: { type: 'shell', command: 'docker-compose up db' },
+        api: { type: 'shell', command: 'npm run dev', dependsOn: ['db'] },
+        web: { type: 'shell', command: 'npm run start' },
+      });
+      
+      const manager = new RunnableManager(config);
+      manager.init(['db', 'api', 'web']);
+      
+      await manager.startWithDependencies('api');
+      await vi.advanceTimersByTimeAsync(0);
+      
+      // Both api and db should be starting
+      expect(['starting', 'waiting']).toContain(manager.get('api')?.status);
+      expect(manager.get('db')?.status).toBe('starting');
+      
+      // web should still be stopped and hidden
+      expect(manager.get('web')?.status).toBe('stopped');
+      expect(manager.get('web')?.hidden).toBe(true);
+      
+      // api and db should be unhidden
+      expect(manager.get('api')?.hidden).toBe(false);
+      expect(manager.get('db')?.hidden).toBe(false);
+      
+      vi.useRealTimers();
+    });
+
+    it('does not restart already running dependencies', async () => {
+      vi.useFakeTimers();
+      
+      const mockProc1 = createMockProcess();
+      const mockProc2 = createMockProcess();
+      mockProc2.pid = 12346;
+      
+      vi.mocked(spawn)
+        .mockReturnValueOnce(mockProc1)
+        .mockReturnValueOnce(mockProc2);
+      
+      const config = createConfig({
+        db: { type: 'shell', command: 'docker-compose up db' },
+        api: { type: 'shell', command: 'npm run dev', dependsOn: ['db'] },
+      });
+      
+      const manager = new RunnableManager(config);
+      manager.init(['db', 'api']);
+      
+      // Start db first
+      await manager.start('db');
+      await vi.advanceTimersByTimeAsync(500); // past grace period
+      expect(manager.get('db')?.status).toBe('running');
+      
+      vi.mocked(spawn).mockClear();
+      
+      // Now start api with dependencies
+      await manager.startWithDependencies('api');
+      await vi.advanceTimersByTimeAsync(0);
+      
+      // Should only spawn once (for api, not db again)
+      expect(spawn).toHaveBeenCalledTimes(1);
+      
+      vi.useRealTimers();
     });
   });
 });

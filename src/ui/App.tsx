@@ -9,6 +9,7 @@ import { CommandPalette } from "./CommandPalette.js";
 import { OutputOverlay } from "./OutputOverlay.js";
 import { BackgroundScriptsList } from "./BackgroundScriptsList.js";
 import { BackgroundLogViewer } from "./BackgroundLogViewer.js";
+import { StartServicePicker } from "./StartServicePicker.js";
 import { RunnableManager } from "../runnables/manager.js";
 import { ScriptRegistry } from "../scripts/registry.js";
 import { ScriptRunner } from "../scripts/runner.js";
@@ -20,7 +21,7 @@ import {
   ManagerStoreProvider,
 } from "../state/managerStore.js";
 
-type AppMode = "normal" | "help" | "palette" | "output" | "background-list";
+type AppMode = "normal" | "help" | "palette" | "output" | "background-list" | "start-picker";
 
 interface AppProps {
   manager: RunnableManager;
@@ -37,7 +38,14 @@ export function App({
   const { height, width } = useScreenSize();
 
   const [managerStore] = useState(() => createManagerStore(manager));
-  const instances = managerStore.useStore((state) => state.instances);
+  const allInstances = managerStore.useStore((state) => state.instances);
+  
+  // Filter to only show visible (non-hidden) services for navigation
+  const visibleInstances = useMemo(
+    () => allInstances.filter((i) => !i.hidden),
+    [allInstances]
+  );
+  
   const [activeIndex, setActiveIndex] = useState(0);
   const [message, setMessage] = useState<string>();
   const [mode, setMode] = useState<AppMode>("normal");
@@ -61,16 +69,23 @@ export function App({
   const [backgroundScripts, setBackgroundScripts] = useState<BackgroundScript[]>([]);
   const backgroundRunnersRef = useRef<Map<string, ScriptRunner>>(new Map());
 
-  // Compute total tabs: services + background scripts
-  const totalTabs = instances.length + backgroundScripts.length;
+  // Compute total tabs: visible services + background scripts
+  const totalTabs = visibleInstances.length + backgroundScripts.length;
 
   // Determine what's active: service or background script
-  const isBackgroundActive = activeIndex >= instances.length;
-  const activeInstance = isBackgroundActive ? null : (instances[activeIndex] ?? null);
+  const isBackgroundActive = activeIndex >= visibleInstances.length;
+  const activeInstance = isBackgroundActive ? null : (visibleInstances[activeIndex] ?? null);
   const activeId = activeInstance?.id ?? null;
   const activeBackgroundScript = isBackgroundActive
-    ? backgroundScripts[activeIndex - instances.length] ?? null
+    ? backgroundScripts[activeIndex - visibleInstances.length] ?? null
     : null;
+
+  // Keep activeIndex in bounds when visibility changes
+  useEffect(() => {
+    if (totalTabs > 0 && activeIndex >= totalTabs) {
+      setActiveIndex(totalTabs - 1);
+    }
+  }, [totalTabs, activeIndex]);
 
   // Get cwd for ad-hoc commands (from active runnable or process.cwd)
   const paletteCwd = useMemo(() => {
@@ -318,7 +333,7 @@ export function App({
 
     // Number keys 1-9 to switch services
     const num = parseInt(input);
-    if (num >= 1 && num <= 9 && num <= instances.length) {
+    if (num >= 1 && num <= 9 && num <= visibleInstances.length) {
       setActiveIndex(num - 1);
       return;
     }
@@ -346,10 +361,19 @@ export function App({
       return;
     }
 
-    // s - stop current service
-    if (input === "s" && activeId) {
+    // x - stop current service
+    if (input === "x" && activeId) {
       manager.stop(activeId);
       showMessage(`Stopping ${activeId}...`);
+      return;
+    }
+
+    // s - open start service picker (if there are hidden services)
+    if (input === "s") {
+      const hiddenServices = manager.getHiddenServices();
+      if (hiddenServices.length > 0) {
+        setMode("start-picker");
+      }
       return;
     }
 
@@ -360,9 +384,9 @@ export function App({
       return;
     }
 
-    // R - restart all services
+    // R - restart all visible services
     if (input === "R") {
-      for (const instance of instances) {
+      for (const instance of visibleInstances) {
         manager.restart(instance.id);
       }
       showMessage("Restarting all services...");
@@ -397,7 +421,7 @@ export function App({
       <Box flexDirection="column" height={height} width={width}>
         {/* Status bar at top */}
         <StatusBar 
-          instances={instances} 
+          instances={visibleInstances} 
           activeId={activeId} 
           backgroundScripts={backgroundScripts}
           activeBackgroundId={activeBackgroundScript?.id ?? null}
@@ -425,7 +449,11 @@ export function App({
         )}
 
         {/* Command bar at bottom */}
-        <CommandBar message={message} backgroundScriptsCount={backgroundScripts.length} />
+        <CommandBar 
+          message={message} 
+          backgroundScriptsCount={backgroundScripts.length}
+          hiddenServicesCount={allInstances.length - visibleInstances.length}
+        />
 
         {/* Help popup overlay */}
         {mode === "help" && (
@@ -573,6 +601,64 @@ export function App({
                 onRestore={handleRestoreScript}
                 onDismiss={handleDismissScript}
                 onCancel={handleCancelBackgroundScript}
+              />
+            </Box>
+          </Box>
+        )}
+
+        {/* Start service picker overlay */}
+        {mode === "start-picker" && (
+          <Box
+            flexDirection="column"
+            width={width}
+            height={height}
+            position="absolute"
+          >
+            {/* Backdrop layer */}
+            <Box
+              position="absolute"
+              flexDirection="column"
+              width={width}
+              height={height}
+            >
+              {Array.from({ length: height }).map((_, i) => (
+                <Text key={i} backgroundColor="black">
+                  {" ".repeat(width)}
+                </Text>
+              ))}
+            </Box>
+
+            {/* Content */}
+            <Box
+              position="absolute"
+              flexDirection="column"
+              width={width}
+              height={height}
+            >
+              <StartServicePicker
+                hiddenServices={manager.getHiddenServices()}
+                width={width}
+                height={height}
+                onClose={() => setMode("normal")}
+                onStart={(serviceId) => {
+                  // Start the service with its dependencies
+                  manager.startWithDependencies(serviceId);
+                  
+                  // Close picker and return to normal mode
+                  setMode("normal");
+                  
+                  // Select the newly started service after it becomes visible
+                  // We need a small delay for the hidden-change event to propagate
+                  setTimeout(() => {
+                    const visible = manager.getVisibleServices();
+                    const newIndex = visible.findIndex(s => s.id === serviceId);
+                    if (newIndex !== -1) {
+                      setActiveIndex(newIndex);
+                    }
+                  }, 50);
+                  
+                  showMessage(`Starting ${serviceId}...`);
+                }}
               />
             </Box>
           </Box>

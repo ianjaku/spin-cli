@@ -125,9 +125,9 @@ Options:
     process.exit(1);
   }
   
-  // Create manager and initialize services
+  // Create manager and initialize ALL services (sleeping by default)
   const manager = new RunnableManager(config);
-  manager.init(targets);
+  manager.init(Object.keys(config.runnables));
   
   // Create script registry (lazy initialization on first palette open)
   const registry = createScriptRegistry(config);
@@ -169,8 +169,8 @@ Options:
   process.on('SIGINT', cleanup);
   process.on('SIGTERM', cleanup);
   
-  // Start all services
-  await manager.startAll();
+  // Start only the requested services (and their dependencies)
+  await manager.startAll(targets);
   
   // Wait until exit
   await ink.waitUntilExit();

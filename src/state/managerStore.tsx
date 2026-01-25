@@ -92,18 +92,24 @@ export function createManagerStore(
     setInstances();
   };
 
+  const handleHiddenChange = () => {
+    setInstances();
+  };
+
   const handleOutput = (id: string) => {
     pendingIds.add(id);
     scheduleFlush();
   };
 
   manager.on('status-change', handleStatusChange);
+  manager.on('hidden-change', handleHiddenChange);
   manager.on('output', handleOutput);
 
   setInstances();
 
   const dispose = () => {
     manager.off('status-change', handleStatusChange);
+    manager.off('hidden-change', handleHiddenChange);
     manager.off('output', handleOutput);
     if (flushTimer) {
       clearTimeout(flushTimer);

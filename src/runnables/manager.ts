@@ -5,7 +5,8 @@ import type {
   SpinConfig, 
   RunnableDefinition, 
   RunnableInstance, 
-  RunnableStatus 
+  RunnableStatus,
+  OnReadyContext,
 } from '../types.js';
 
 const MAX_OUTPUT_LINES = 1000;
@@ -17,6 +18,7 @@ const stripAnsi = (str: string): string =>
 interface ManagerEvents {
   'status-change': [id: string, status: RunnableStatus, error?: string];
   'output': [id: string, line: string, stream: 'stdout' | 'stderr'];
+  'hidden-change': [id: string, hidden: boolean];
 }
 
 export class RunnableManager extends EventEmitter<ManagerEvents> {
@@ -25,6 +27,10 @@ export class RunnableManager extends EventEmitter<ManagerEvents> {
   private outputBuffers: Map<string, { stdout: OutputBuffer; stderr: OutputBuffer; output: OutputBuffer }> = new Map();
   private maxOutputLines: number;
   private readyCheckTimers: Map<string, NodeJS.Timeout> = new Map();
+  /** Runtime env vars set by onReady callbacks, keyed by runnable id */
+  private runtimeEnv: Map<string, Record<string, string>> = new Map();
+  /** Track which runnables have had their onReady invoked (once-only guard) */
+  private onReadyCalled: Set<string> = new Set();
   
   constructor(config: SpinConfig) {
     super();
@@ -45,9 +51,24 @@ export class RunnableManager extends EventEmitter<ManagerEvents> {
   get(id: string): RunnableInstance | undefined {
     return this.instances.get(id);
   }
+
+  /**
+   * Get all hidden (sleeping) services.
+   */
+  getHiddenServices(): RunnableInstance[] {
+    return Array.from(this.instances.values()).filter(i => i.hidden);
+  }
+
+  /**
+   * Get all visible (non-hidden) services.
+   */
+  getVisibleServices(): RunnableInstance[] {
+    return Array.from(this.instances.values()).filter(i => !i.hidden);
+  }
   
   /**
    * Initialize runnables (creates instances but doesn't start them).
+   * All instances start with hidden=true (sleeping state).
    */
   init(ids: string[]): void {
     for (const id of ids) {
@@ -62,6 +83,7 @@ export class RunnableManager extends EventEmitter<ManagerEvents> {
         },
         status: 'stopped',
         process: null,
+        hidden: true, // Start hidden (sleeping) by default
       } as RunnableInstance;
 
       this.instances.set(id, instance);
@@ -72,12 +94,17 @@ export class RunnableManager extends EventEmitter<ManagerEvents> {
   
   /**
    * Start a runnable by ID.
+   * Also unhides the service (makes it visible in UI).
+   * @param additionalEnv Optional env vars inherited from dependencies' onReady callbacks
    */
-  async start(id: string): Promise<void> {
+  async start(id: string, additionalEnv?: Record<string, string>): Promise<void> {
     const instance = this.instances.get(id);
     if (!instance) {
       throw new Error(`Unknown runnable: ${id}`);
     }
+    
+    // Unhide when starting (make visible in UI)
+    this.setHidden(id, false);
     
     if (instance.status === 'running' || instance.status === 'starting') {
       return; // Already running
@@ -92,8 +119,10 @@ export class RunnableManager extends EventEmitter<ManagerEvents> {
     // Update status
     this.setStatus(id, 'starting');
     
-    // Clear previous output
+    // Clear previous state (for restarts)
     this.clearOutputBuffers(id);
+    this.runtimeEnv.delete(id);
+    this.onReadyCalled.delete(id);
     instance.error = undefined;
     const existingTimer = this.readyCheckTimers.get(id);
     if (existingTimer) {
@@ -110,6 +139,7 @@ export class RunnableManager extends EventEmitter<ManagerEvents> {
         ...process.env,
         ...this.config.defaults?.env,
         ...definition.env,
+        ...additionalEnv, // Inherited runtime env from dependencies
         FORCE_COLOR: '1', // Preserve colors in output
       },
       shell: true,
@@ -160,9 +190,10 @@ export class RunnableManager extends EventEmitter<ManagerEvents> {
       // No readyWhen - use a grace period before marking as running
       // This allows fast-failing processes (like invalid docker images) to error
       // before dependents start
-      const graceTimer = setTimeout(() => {
+      const graceTimer = setTimeout(async () => {
         // Only mark running if still in starting state (not errored)
         if (instance.status === 'starting') {
+          await this.invokeOnReady(id);
           this.setStatus(id, 'running');
         }
       }, 500);
@@ -217,6 +248,51 @@ export class RunnableManager extends EventEmitter<ManagerEvents> {
     await this.stop(id);
     await this.start(id);
   }
+
+  /**
+   * Start a service along with any stopped dependencies.
+   * For UI use when starting a sleeping service from the picker.
+   * Unhides the service and all required dependencies, then starts them in order.
+   */
+  async startWithDependencies(id: string): Promise<void> {
+    const instance = this.instances.get(id);
+    if (!instance) {
+      throw new Error(`Unknown runnable: ${id}`);
+    }
+
+    // Get all transitive dependencies
+    const allIds = this.getTransitiveDependencies([id]);
+    
+    // Find which ones need to be started (stopped or error state)
+    const toStart = allIds.filter(depId => {
+      const dep = this.instances.get(depId);
+      return dep && dep.status !== 'running' && dep.status !== 'starting' && dep.status !== 'waiting';
+    });
+
+    // Unhide all services that will be started
+    for (const depId of allIds) {
+      this.setHidden(depId, false);
+    }
+
+    // If nothing to start, we're done
+    if (toStart.length === 0) {
+      return;
+    }
+
+    // Get topological order for the services that need starting
+    const order = this.getTopologicalOrderFor(toStart);
+
+    // Start dependency watcher for recovery
+    this.setupDependencyWatcher();
+
+    // Start each service with deps (handles waiting for dependencies)
+    for (const depId of order) {
+      const dep = this.instances.get(depId);
+      if (dep && dep.status !== 'running' && dep.status !== 'starting' && dep.status !== 'waiting') {
+        this.startWithDeps(depId);
+      }
+    }
+  }
   
   /**
    * Stop all runnables.
@@ -228,18 +304,52 @@ export class RunnableManager extends EventEmitter<ManagerEvents> {
   }
   
   /**
-   * Start all initialized runnables in dependency order.
+   * Start runnables in dependency order.
+   * If ids provided: start only those services (+ their transitive deps), unhiding them.
+   * If ids omitted: start all initialized services.
    */
-  async startAll(): Promise<void> {
-    const order = this.getTopologicalOrder();
+  async startAll(ids?: string[]): Promise<void> {
+    let order: string[];
+
+    if (ids && ids.length > 0) {
+      // Get transitive deps and compute topo order for subset
+      order = this.getTopologicalOrderFor(ids);
+      
+      // Unhide all services that will be started
+      for (const id of order) {
+        this.setHidden(id, false);
+      }
+    } else {
+      // Start all - unhide everything
+      order = this.getTopologicalOrder();
+      for (const id of order) {
+        this.setHidden(id, false);
+      }
+    }
 
     // Start dependency watcher for recovery
     this.setupDependencyWatcher();
 
     for (const id of order) {
+      const instance = this.instances.get(id);
+      // Skip if already running or starting
+      if (instance?.status === 'running' || instance?.status === 'starting') {
+        continue;
+      }
       // Don't await - let them run, waitForRunning handles ordering
       this.startWithDeps(id);
     }
+  }
+
+  /**
+   * Set the hidden state of a service and emit event.
+   */
+  private setHidden(id: string, hidden: boolean): void {
+    const instance = this.instances.get(id);
+    if (!instance || instance.hidden === hidden) return;
+    
+    instance.hidden = hidden;
+    this.emit('hidden-change', id, hidden);
   }
   
   private setStatus(id: string, status: RunnableStatus, error?: string): void {
@@ -250,6 +360,35 @@ export class RunnableManager extends EventEmitter<ManagerEvents> {
     instance.error = error;
     
     this.emit('status-change', id, status, error);
+  }
+
+  /**
+   * Invoke the onReady callback for a runnable (once-only, best-effort).
+   * Must be called before transitioning to 'running' status.
+   */
+  private async invokeOnReady(id: string): Promise<void> {
+    // Once-only guard
+    if (this.onReadyCalled.has(id)) return;
+    this.onReadyCalled.add(id);
+
+    const instance = this.instances.get(id);
+    if (!instance?.definition.onReady) return;
+
+    const context: OnReadyContext = {
+      output: stripAnsi(this.getOutputLines(id, 'all', 500).join('\n')),
+      setEnv: (key, value) => {
+        const envMap = this.runtimeEnv.get(id) ?? {};
+        envMap[key] = value;
+        this.runtimeEnv.set(id, envMap);
+      },
+    };
+
+    try {
+      await instance.definition.onReady(context);
+    } catch (err) {
+      // Best-effort: log and continue, don't fail the runnable
+      console.error(`[${id}] onReady error:`, err);
+    }
   }
   
   private addOutput(id: string, line: string, stream: 'stdout' | 'stderr'): void {
@@ -277,7 +416,11 @@ export class RunnableManager extends EventEmitter<ManagerEvents> {
       const allOutput = this.getOutputLines(id, 'all').join('\n');
       // Strip ANSI codes so users can match plain text like "Local:"
       if (instance.definition.readyWhen(stripAnsi(allOutput))) {
-        this.setStatus(id, 'running');
+        // Invoke onReady before transitioning (fire-and-forget, guarded)
+        this.invokeOnReady(id).then(() => {
+          this.setStatus(id, 'running');
+        });
+        return; // Don't continue synchronously
       }
     }
   }
@@ -372,8 +515,17 @@ export class RunnableManager extends EventEmitter<ManagerEvents> {
    */
   private getTopologicalOrder(): string[] {
     const ids = Array.from(this.instances.keys());
+    return this.computeTopologicalOrder(ids);
+  }
 
-    // Validate all dependencies exist
+  /**
+   * Compute topological order for a given set of IDs.
+   * Used internally by both getTopologicalOrder and getTopologicalOrderFor.
+   */
+  private computeTopologicalOrder(ids: string[]): string[] {
+    const idSet = new Set(ids);
+
+    // Validate all dependencies exist in instances (not necessarily in the subset)
     for (const id of ids) {
       const deps = this.instances.get(id)?.definition.dependsOn ?? [];
       for (const dep of deps) {
@@ -381,13 +533,13 @@ export class RunnableManager extends EventEmitter<ManagerEvents> {
           throw new Error(
             `Unknown dependency "${dep}" in runnable "${id}".\n\n` +
             `  dependsOn: ["${dep}"]  ← not found\n\n` +
-            `Available runnables: ${ids.join(', ')}`
+            `Available runnables: ${Array.from(this.instances.keys()).join(', ')}`
           );
         }
       }
     }
 
-    // Kahn's algorithm for topological sort
+    // Kahn's algorithm for topological sort (only considering deps within the subset)
     const inDegree = new Map<string, number>();
     const graph = new Map<string, string[]>(); // dependency -> dependents
 
@@ -398,8 +550,10 @@ export class RunnableManager extends EventEmitter<ManagerEvents> {
 
     for (const id of ids) {
       const deps = this.instances.get(id)?.definition.dependsOn ?? [];
-      inDegree.set(id, deps.length);
-      for (const dep of deps) {
+      // Only count dependencies that are in our subset
+      const subsetDeps = deps.filter(dep => idSet.has(dep));
+      inDegree.set(id, subsetDeps.length);
+      for (const dep of subsetDeps) {
         graph.get(dep)?.push(id);
       }
     }
@@ -423,6 +577,39 @@ export class RunnableManager extends EventEmitter<ManagerEvents> {
     }
 
     return sorted;
+  }
+
+  /**
+   * Get all transitive dependencies for the given IDs (including the IDs themselves).
+   * Uses BFS to collect all dependencies recursively.
+   */
+  getTransitiveDependencies(ids: string[]): string[] {
+    const visited = new Set<string>();
+    const queue = [...ids];
+
+    while (queue.length > 0) {
+      const id = queue.shift()!;
+      if (visited.has(id)) continue;
+      visited.add(id);
+
+      const deps = this.instances.get(id)?.definition.dependsOn ?? [];
+      for (const dep of deps) {
+        if (!visited.has(dep)) {
+          queue.push(dep);
+        }
+      }
+    }
+
+    return Array.from(visited);
+  }
+
+  /**
+   * Get topological order for a subset of services (given IDs + their transitive deps).
+   * Used by startAll(ids) to start only the relevant services in correct order.
+   */
+  getTopologicalOrderFor(ids: string[]): string[] {
+    const allIds = this.getTransitiveDependencies(ids);
+    return this.computeTopologicalOrder(allIds);
   }
 
   /**
@@ -450,6 +637,20 @@ export class RunnableManager extends EventEmitter<ManagerEvents> {
   }
 
   /**
+   * Collect runtime env vars from the given dependency IDs.
+   */
+  private collectEnvFromDependencies(deps: string[]): Record<string, string> {
+    const inheritedEnv: Record<string, string> = {};
+    for (const depId of deps) {
+      const depEnv = this.runtimeEnv.get(depId);
+      if (depEnv) {
+        Object.assign(inheritedEnv, depEnv);
+      }
+    }
+    return inheritedEnv;
+  }
+
+  /**
    * Start a runnable, waiting for its dependencies first.
    */
   private async startWithDeps(id: string): Promise<void> {
@@ -468,7 +669,11 @@ export class RunnableManager extends EventEmitter<ManagerEvents> {
     try {
       await Promise.all(deps.map(dep => this.waitForRunning(dep)));
       instance.waitingFor = undefined;
-      await this.start(id);
+      
+      // Collect env vars from all dependencies
+      const inheritedEnv = this.collectEnvFromDependencies(deps);
+      
+      await this.start(id, inheritedEnv);
     } catch {
       // Dependency failed - stay in waiting state, watcher will retry
       // Don't clear waitingFor so UI can show which dep failed
@@ -498,8 +703,11 @@ export class RunnableManager extends EventEmitter<ManagerEvents> {
           });
 
           if (allDepsRunning) {
+            const deps = instance.waitingFor;
             instance.waitingFor = undefined;
-            this.start(id);
+            // Collect env vars from dependencies before starting
+            const inheritedEnv = this.collectEnvFromDependencies(deps);
+            this.start(id, inheritedEnv);
           }
         }
       }

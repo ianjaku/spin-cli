@@ -7,6 +7,17 @@ import type { ChildProcess } from 'node:child_process';
 export type RunnableStatus = 'stopped' | 'waiting' | 'starting' | 'running' | 'error';
 
 // ============================================================================
+// OnReady Context (passed to onReady callback)
+// ============================================================================
+
+export interface OnReadyContext {
+  /** Recent output (ANSI stripped, last 500 lines) */
+  output: string;
+  /** Set environment variable for dependent runnables */
+  setEnv: (key: string, value: string) => void;
+}
+
+// ============================================================================
 // Runnable Definition (what users define in config)
 // ============================================================================
 
@@ -27,6 +38,8 @@ export interface RunnableDefinition {
   dependsOn?: string[];
   /** Function to determine if the service is ready */
   readyWhen?: (output: string) => boolean;
+  /** Callback invoked once when service becomes ready (after readyWhen matches) */
+  onReady?: (context: OnReadyContext) => void | Promise<void>;
 }
 
 // ============================================================================
@@ -54,6 +67,8 @@ export interface RunnableInstance {
   startedAt?: Date;
   /** IDs of dependencies this instance is waiting for (when status is 'waiting') */
   waitingFor?: string[];
+  /** If true, service is not shown in UI and excluded from navigation (sleeping) */
+  hidden: boolean;
 }
 
 // ============================================================================
