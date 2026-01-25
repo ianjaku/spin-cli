@@ -9,6 +9,7 @@ export default defineConfig({
     packageScripts(),
   ],
   runnables: {
+    
 
     next: shell("bun run dev", {
       cwd: "/home/ian/projects/manual/mtomanny/manny",
