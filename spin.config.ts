@@ -2,14 +2,18 @@
  * Example spin configuration file.
  * Copy this to your project root as spin.config.ts and customize.
  */
-import { defineConfig, shell, docker } from 'spin-cli';
+import { defineConfig, shell, docker, packageScripts } from 'spin-cli';
 
 export default defineConfig({
+  scripts: [
+    packageScripts(),
+  ],
   runnables: {
 
     next: shell("bun run dev", {
       cwd: "/home/ian/projects/manual/mtomanny/manny",
       readyWhen: (output) => output.includes('Ready'),
+      dependsOn: ["postgres"]
     }),
 
     // Docker containers

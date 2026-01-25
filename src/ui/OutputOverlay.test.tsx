@@ -32,11 +32,10 @@ describe('OutputOverlay', () => {
       expect(lastFrame()).toContain('bun run migrate.ts');
     });
 
-    it('renders the working directory', () => {
+    it('renders the command with $ prefix', () => {
       const { lastFrame } = render(<OutputOverlay {...defaultProps} />);
       
-      expect(lastFrame()).toContain('Running in:');
-      expect(lastFrame()).toContain('/project/scripts');
+      expect(lastFrame()).toContain('$ bun run migrate.ts');
     });
 
     it('renders output lines', () => {
@@ -52,20 +51,20 @@ describe('OutputOverlay', () => {
       expect(lastFrame()).toContain('Line 3');
     });
 
-    it('shows "No output" when output is empty and not running', () => {
+    it('shows "no output" when output is empty and not running', () => {
       const { lastFrame } = render(
         <OutputOverlay {...defaultProps} status="success" />
       );
       
-      expect(lastFrame()).toContain('No output');
+      expect(lastFrame()).toContain('no output');
     });
 
-    it('shows "Waiting for output" when running with no output', () => {
+    it('shows "waiting for output..." when running with no output', () => {
       const { lastFrame } = render(
         <OutputOverlay {...defaultProps} status="running" />
       );
       
-      expect(lastFrame()).toContain('Waiting for output');
+      expect(lastFrame()).toContain('waiting for output...');
     });
   });
 
@@ -75,8 +74,7 @@ describe('OutputOverlay', () => {
         <OutputOverlay {...defaultProps} status="running" />
       );
       
-      expect(lastFrame()).toContain('Running');
-      expect(lastFrame()).toContain('●');
+      expect(lastFrame()).toContain('running');
     });
 
     it('shows success indicator', () => {
@@ -84,8 +82,7 @@ describe('OutputOverlay', () => {
         <OutputOverlay {...defaultProps} status="success" />
       );
       
-      expect(lastFrame()).toContain('Completed');
-      expect(lastFrame()).toContain('✓');
+      expect(lastFrame()).toContain('done');
     });
 
     it('shows error indicator with exit code', () => {
@@ -97,9 +94,8 @@ describe('OutputOverlay', () => {
         />
       );
       
-      expect(lastFrame()).toContain('Failed');
-      expect(lastFrame()).toContain('1');
-      expect(lastFrame()).toContain('✗');
+      expect(lastFrame()).toContain('failed');
+      expect(lastFrame()).toContain('(1)');
     });
   });
 
@@ -135,7 +131,7 @@ describe('OutputOverlay', () => {
         <OutputOverlay {...defaultProps} status="running" />
       );
       
-      expect(lastFrame()).toContain('Ctrl+C');
+      expect(lastFrame()).toContain('ctrl+c');
       expect(lastFrame()).toContain('cancel');
     });
 
@@ -144,9 +140,9 @@ describe('OutputOverlay', () => {
         <OutputOverlay {...defaultProps} status="success" />
       );
       
-      expect(lastFrame()).toContain('Enter');
+      expect(lastFrame()).toContain('enter');
       expect(lastFrame()).toContain('close');
-      expect(lastFrame()).toContain('[r]');
+      expect(lastFrame()).toContain('r');
       expect(lastFrame()).toContain('rerun');
     });
 
@@ -159,7 +155,7 @@ describe('OutputOverlay', () => {
         />
       );
       
-      expect(lastFrame()).toContain('[y]');
+      expect(lastFrame()).toContain('y');
       expect(lastFrame()).toContain('copy');
     });
   });

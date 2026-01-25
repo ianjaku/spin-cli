@@ -31,7 +31,7 @@ export interface ServiceInfo {
   /** Human-readable name */
   name: string;
   /** Current status */
-  status: 'stopped' | 'starting' | 'running' | 'error';
+  status: 'stopped' | 'waiting' | 'starting' | 'running' | 'error';
   /** Description from config */
   description?: string;
   /** Error message if status is 'error' */

@@ -37,33 +37,36 @@ describe('CommandPalette', () => {
   });
 
   describe('rendering', () => {
-    it('renders the palette header', () => {
+    it('renders the input prompt', () => {
       const { lastFrame } = render(<CommandPalette {...defaultProps} />);
       
-      expect(lastFrame()).toContain('Run');
+      expect(lastFrame()).toContain(': ');
     });
 
     it('renders the input cursor', () => {
       const { lastFrame } = render(<CommandPalette {...defaultProps} />);
       
-      expect(lastFrame()).toContain('>');
-      expect(lastFrame()).toContain('█');
+      expect(lastFrame()).toContain(': ');
+      expect(lastFrame()).toContain('_');
     });
 
     it('renders keyboard shortcuts in footer', () => {
       const { lastFrame } = render(<CommandPalette {...defaultProps} />);
       
-      expect(lastFrame()).toContain('Enter:run');
-      expect(lastFrame()).toContain('Tab:fill');
-      expect(lastFrame()).toContain('Esc:close');
+      expect(lastFrame()).toContain('enter');
+      expect(lastFrame()).toContain('run');
+      expect(lastFrame()).toContain('tab');
+      expect(lastFrame()).toContain('fill');
+      expect(lastFrame()).toContain('esc');
+      expect(lastFrame()).toContain('close');
     });
 
-    it('shows "No scripts configured" when empty', () => {
+    it('shows "no scripts configured" when empty', () => {
       const { lastFrame } = render(
         <CommandPalette {...defaultProps} scripts={[]} />
       );
       
-      expect(lastFrame()).toContain('No scripts configured');
+      expect(lastFrame()).toContain('no scripts configured');
     });
 
     it('shows scripts when provided', () => {
@@ -82,11 +85,9 @@ describe('CommandPalette', () => {
       
       expect(lastFrame()).toContain('migrate.ts');
       expect(lastFrame()).toContain('deploy.sh');
-      expect(lastFrame()).toContain('bun run');
-      expect(lastFrame()).toContain('bash');
     });
 
-    it('shows selection indicator on first item', () => {
+    it('shows first item with enter hint when not selected', () => {
       const scripts = [
         createMockScript({ id: 's1', displayName: 'first.ts' }),
         createMockScript({ id: 's2', displayName: 'second.ts' }),
@@ -100,7 +101,7 @@ describe('CommandPalette', () => {
         />
       );
       
-      expect(lastFrame()).toContain('▸');
+      expect(lastFrame()).toContain('(enter to run)');
     });
   });
 
@@ -216,7 +217,7 @@ describe('CommandPalette', () => {
       stdin.write('git status');
       await wait();
       
-      expect(lastFrame()).toContain('will run as shell command');
+      expect(lastFrame()).toContain('shell command');
     });
 
     it('shows shell command message for ! prefix', async () => {
@@ -226,7 +227,7 @@ describe('CommandPalette', () => {
       stdin.write('!some-command');
       await wait();
       
-      expect(lastFrame()).toContain('will run as shell command');
+      expect(lastFrame()).toContain('shell command');
     });
 
     it('does not show shell command message for normal search', async () => {
@@ -491,8 +492,8 @@ describe('CommandPalette', () => {
       await wait();
       
       expect(onRun).not.toHaveBeenCalled();
-      // Should be back to search mode
-      expect(lastFrame()).toContain('Run');
+      // Should be back to search mode (shows script list)
+      expect(lastFrame()).toContain('dangerous.ts');
       expect(lastFrame()).not.toContain('Confirm');
     });
   });

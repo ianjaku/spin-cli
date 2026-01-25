@@ -1,6 +1,16 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Box, Text, useInput } from 'ink';
-import type { ResolvedScript } from '../types.js';
+import React, { useState, useEffect, useCallback, useMemo } from "react";
+import { Box, Text, useInput } from "ink";
+import type { ResolvedScript } from "../types.js";
+
+/** Renders a key + description hint */
+function Hint({ keyName, desc }: { keyName: string; desc: string }) {
+  return (
+    <Box>
+      <Text backgroundColor="#1a1a1a" dimColor>{` ${keyName} `}</Text>
+      <Text dimColor> {desc}</Text>
+    </Box>
+  );
+}
 
 interface CommandPaletteProps {
   /** All available scripts */
@@ -23,7 +33,7 @@ interface CommandPaletteProps {
   onSearch: (query: string) => ResolvedScript[];
 }
 
-type PaletteMode = 'search' | 'confirm';
+type PaletteMode = "search" | "confirm";
 
 export function CommandPalette({
   scripts,
@@ -36,11 +46,13 @@ export function CommandPalette({
   onClose,
   onSearch,
 }: CommandPaletteProps) {
-  const [input, setInput] = useState('');
-  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [input, setInput] = useState("");
+  const [selectedIndex, setSelectedIndex] = useState(-1);
   const [historyIndex, setHistoryIndex] = useState(-1);
-  const [mode, setMode] = useState<PaletteMode>('search');
-  const [confirmScript, setConfirmScript] = useState<ResolvedScript | null>(null);
+  const [mode, setMode] = useState<PaletteMode>("search");
+  const [confirmScript, setConfirmScript] = useState<ResolvedScript | null>(
+    null,
+  );
 
   // Calculate dimensions
   const maxResults = Math.max(1, height - 6); // Account for borders and input
@@ -48,8 +60,8 @@ export function CommandPalette({
   // Determine if input should bypass search
   const shouldBypass = useMemo(() => {
     if (!input.trim()) return false;
-    if (input.startsWith('!')) return true;
-    const firstWord = input.split(' ')[0];
+    if (input.startsWith("!")) return true;
+    const firstWord = input.split(" ")[0];
     return shellCommands.includes(firstWord);
   }, [input, shellCommands]);
 
@@ -61,19 +73,22 @@ export function CommandPalette({
 
   // Reset selected index when results change
   useEffect(() => {
-    setSelectedIndex(0);
+    setSelectedIndex(-1);
   }, [results.length]);
 
   // Handle running a command
-  const handleRun = useCallback((command: string, targetCwd: string, script?: ResolvedScript) => {
-    // Check if confirmation is needed
-    if (script?.confirm) {
-      setConfirmScript(script);
-      setMode('confirm');
-      return;
-    }
-    onRun(command, targetCwd);
-  }, [onRun]);
+  const handleRun = useCallback(
+    (command: string, targetCwd: string, script?: ResolvedScript) => {
+      // Check if confirmation is needed
+      if (script?.confirm) {
+        setConfirmScript(script);
+        setMode("confirm");
+        return;
+      }
+      onRun(command, targetCwd);
+    },
+    [onRun],
+  );
 
   // Handle confirmation
   const handleConfirm = useCallback(() => {
@@ -85,18 +100,18 @@ export function CommandPalette({
   // Handle keyboard input
   useInput((char, key) => {
     // Confirmation mode
-    if (mode === 'confirm') {
+    if (mode === "confirm") {
       if (key.return) {
         handleConfirm();
       } else if (key.escape) {
-        setMode('search');
+        setMode("search");
         setConfirmScript(null);
       }
       return;
     }
 
     // Search mode
-    if (key.escape || (key.ctrl && char === 'c')) {
+    if (key.escape || (key.ctrl && char === "c")) {
       onClose();
       return;
     }
@@ -105,10 +120,10 @@ export function CommandPalette({
       // Run command
       if (shouldBypass) {
         // Strip ! prefix if present
-        const cmd = input.startsWith('!') ? input.slice(1).trim() : input;
+        const cmd = input.startsWith("!") ? input.slice(1).trim() : input;
         onRun(cmd, cwd);
       } else if (results.length > 0) {
-        const script = results[selectedIndex];
+        const script = results[selectedIndex === -1 ? 0 : selectedIndex];
         handleRun(script.command, script.cwd, script);
       } else if (input.trim()) {
         // No matches - run as shell command
@@ -119,7 +134,7 @@ export function CommandPalette({
 
     if (key.tab && results.length > 0) {
       // Autofill selected command
-      const script = results[selectedIndex];
+      const script = results[selectedIndex === -1 ? 0 : selectedIndex];
       setInput(script.command);
       setHistoryIndex(-1);
       return;
@@ -127,15 +142,24 @@ export function CommandPalette({
 
     // Arrow navigation
     if (key.upArrow) {
-      // Allow history navigation if input is empty OR we're already navigating history
-      if ((input === '' || historyIndex >= 0) && historyIndex < history.length - 1) {
-        // Cycle through history
+      // If already navigating history, continue
+      if (historyIndex >= 0 && historyIndex < history.length - 1) {
         const newIndex = historyIndex + 1;
         setHistoryIndex(newIndex);
-        setInput(history[newIndex] || '');
-      } else if (results.length > 0) {
-        // Navigate results
-        setSelectedIndex(i => Math.max(0, i - 1));
+        setInput(history[newIndex] || "");
+      }
+      // If no selection and empty input, start history
+      else if (selectedIndex === -1 && input === "" && history.length > 0) {
+        setHistoryIndex(0);
+        setInput(history[0] || "");
+      }
+      // If at first item, deselect
+      else if (selectedIndex === 0) {
+        setSelectedIndex(-1);
+      }
+      // Otherwise navigate up
+      else if (selectedIndex > 0) {
+        setSelectedIndex((i) => i - 1);
       }
       return;
     }
@@ -145,130 +169,139 @@ export function CommandPalette({
         // Cycle through history
         const newIndex = historyIndex - 1;
         setHistoryIndex(newIndex);
-        setInput(newIndex >= 0 ? history[newIndex] || '' : '');
+        setInput(newIndex >= 0 ? history[newIndex] || "" : "");
       } else if (results.length > 0) {
         // Navigate results
-        setSelectedIndex(i => Math.min(results.length - 1, i + 1));
+        setSelectedIndex((i) => Math.min(results.length - 1, i + 1));
       }
       return;
     }
 
     // Backspace
     if (key.backspace || key.delete) {
-      setInput(prev => prev.slice(0, -1));
+      setInput((prev) => prev.slice(0, -1));
       setHistoryIndex(-1);
       return;
     }
 
     // Regular character input
     if (char && !key.ctrl && !key.meta) {
-      setInput(prev => prev + char);
+      setInput((prev) => prev + char);
       setHistoryIndex(-1);
     }
   });
 
-  // Render confirmation dialog
-  if (mode === 'confirm' && confirmScript) {
+  // Calculate max width for truncation
+  const maxNameWidth = Math.max(20, width - 30);
+
+  // Render confirmation dialog (full-screen)
+  if (mode === "confirm" && confirmScript) {
     return (
       <Box
         flexDirection="column"
-        borderStyle="round"
-        borderColor="yellow"
-        paddingX={1}
-        width={Math.min(60, width - 4)}
+        width={width}
+        height={height}
+        paddingX={2}
+        paddingY={1}
       >
+        {/* Header */}
         <Box marginBottom={1}>
-          <Text bold color="yellow">Confirm</Text>
+          <Text bold color="yellow">
+            Confirm execution
+          </Text>
         </Box>
+
+        {/* Command info */}
         <Box flexDirection="column" marginBottom={1}>
-          <Text>Run "{confirmScript.displayName}"?</Text>
-          <Text dimColor>Command: {confirmScript.command}</Text>
+          <Text>{confirmScript.displayName}</Text>
+          <Text dimColor>{confirmScript.command}</Text>
           {confirmScript.description && (
             <Text dimColor>{confirmScript.description}</Text>
           )}
         </Box>
+
+        {/* Spacer */}
+        <Box flexGrow={1} />
+
+        {/* Footer hints */}
         <Box gap={2}>
-          <Text dimColor>[Enter] confirm</Text>
-          <Text dimColor>[Escape] cancel</Text>
+          <Hint keyName="enter" desc="confirm" />
+          <Hint keyName="esc" desc="cancel" />
         </Box>
       </Box>
     );
   }
 
-  // Render search palette
+  // Render search palette (full-screen)
   return (
     <Box
       flexDirection="column"
-      borderStyle="round"
-      borderColor="cyan"
-      width={Math.min(70, width - 4)}
+      width={width}
+      height={height}
+      paddingX={2}
+      paddingY={1}
     >
-      {/* Header */}
-      <Box paddingX={1} borderBottom borderStyle="single">
-        <Text bold color="cyan">Run</Text>
-      </Box>
-
-      {/* Input */}
-      <Box paddingX={1} paddingY={0}>
-        <Text color="cyan">&gt; </Text>
+      {/* Input line */}
+      <Box marginBottom={1}>
+        <Text dimColor>: </Text>
         <Text>{input}</Text>
-        <Text color="cyan">█</Text>
+        <Text dimColor>_</Text>
       </Box>
 
-      {/* Results */}
-      <Box flexDirection="column" paddingX={1} paddingY={0}>
+      {/* Results area */}
+      <Box flexDirection="column" flexGrow={1} overflow="hidden">
         {shouldBypass ? (
-          <Text dimColor>
-            (will run as shell command)
-          </Text>
+          <Text dimColor>shell command</Text>
         ) : results.length > 0 ? (
           results.map((script, index) => (
-            <Box key={script.id} gap={1}>
-              <Text color={index === selectedIndex ? 'cyan' : undefined}>
-                {index === selectedIndex ? '▸' : ' '}
-              </Text>
-              <Text
-                bold={index === selectedIndex}
-                color={index === selectedIndex ? 'white' : undefined}
-              >
-                {truncate(script.displayName, 30)}
-              </Text>
-              <Text dimColor>→</Text>
-              <Text dimColor>{script.runnerLabel}</Text>
+            <Box key={script.id}>
+              <Text>{index === selectedIndex ? "> " : "  "}</Text>
+              <Text>{truncate(script.displayName, maxNameWidth)}</Text>
+              {script.description && (
+                <Text dimColor> {truncate(script.description, 40)}</Text>
+              )}
+              {index === 0 && selectedIndex === -1 && (
+                <Text dimColor> (enter to run)</Text>
+              )}
             </Box>
           ))
         ) : input.trim() ? (
-          <Text dimColor>
-            (no matches - will run as shell command)
-          </Text>
+          <Text dimColor>no matches, will run as shell command</Text>
         ) : scripts.length === 0 ? (
-          <Text dimColor>No scripts configured</Text>
+          <Box
+            flexDirection="column"
+            justifyContent="center"
+            alignItems="center"
+            flexGrow={1}
+          >
+            <Text dimColor>no scripts configured</Text>
+            <Box marginTop={1}>
+              <Text dimColor>see </Text>
+              <Text color="cyan">https://spin-cli.dev/docs/scripts</Text>
+            </Box>
+          </Box>
         ) : (
           // Show first few scripts when no input
           scripts.slice(0, maxResults).map((script, index) => (
-            <Box key={script.id} gap={1}>
-              <Text color={index === selectedIndex ? 'cyan' : undefined}>
-                {index === selectedIndex ? '▸' : ' '}
-              </Text>
-              <Text
-                bold={index === selectedIndex}
-                color={index === selectedIndex ? 'white' : undefined}
-              >
-                {truncate(script.displayName, 30)}
-              </Text>
-              <Text dimColor>→</Text>
-              <Text dimColor>{script.runnerLabel}</Text>
+            <Box key={script.id}>
+              <Text>{index === selectedIndex ? "> " : "  "}</Text>
+              <Text>{truncate(script.displayName, maxNameWidth)}</Text>
+              {script.description && (
+                <Text dimColor> {truncate(script.description, 40)}</Text>
+              )}
+              {index === 0 && selectedIndex === -1 && (
+                <Text dimColor> (enter to run)</Text>
+              )}
             </Box>
           ))
         )}
       </Box>
 
-      {/* Footer */}
-      <Box paddingX={1} paddingTop={0} borderTop borderStyle="single" gap={2}>
-        <Text dimColor>Enter:run</Text>
-        <Text dimColor>Tab:fill</Text>
-        <Text dimColor>↑↓:nav</Text>
-        <Text dimColor>Esc:close</Text>
+      {/* Footer hints */}
+      <Box gap={2}>
+        <Hint keyName="enter" desc="run" />
+        <Hint keyName="tab" desc="fill" />
+        <Hint keyName="esc" desc="close" />
       </Box>
     </Box>
   );
@@ -277,5 +310,5 @@ export function CommandPalette({
 /** Truncate string to max length */
 function truncate(str: string, maxLen: number): string {
   if (str.length <= maxLen) return str;
-  return str.slice(0, maxLen - 1) + '…';
+  return str.slice(0, maxLen - 1) + "…";
 }

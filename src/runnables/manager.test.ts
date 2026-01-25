@@ -259,7 +259,9 @@ describe('RunnableManager', () => {
       expect(statusChanges).toContain('starting');
     });
 
-    it('transitions to running status when no readyWhen', async () => {
+    it('transitions to running status when no readyWhen after grace period', async () => {
+      vi.useFakeTimers();
+      
       const config = createConfig({
         api: { type: 'shell', command: 'npm run dev' },
       });
@@ -274,8 +276,16 @@ describe('RunnableManager', () => {
       
       await manager.start('api');
       
+      // Should be starting, not running yet (grace period)
+      expect(manager.get('api')?.status).toBe('starting');
+      
+      // Advance past grace period
+      await vi.advanceTimersByTimeAsync(500);
+      
       expect(statusChanges).toContain('running');
       expect(manager.get('api')?.status).toBe('running');
+      
+      vi.useRealTimers();
     });
 
     it('waits for readyWhen to mark as running', async () => {
@@ -640,6 +650,8 @@ describe('RunnableManager', () => {
 
   describe('startAll', () => {
     it('starts all initialized instances', async () => {
+      vi.useFakeTimers();
+      
       const config = createConfig({
         api: { type: 'shell', command: 'npm run dev' },
         web: { type: 'shell', command: 'npm run start' },
@@ -648,11 +660,277 @@ describe('RunnableManager', () => {
       const manager = new RunnableManager(config);
       manager.init(['api', 'web']);
       
-      await manager.startAll();
+      manager.startAll();
+      
+      // Give it a tick to process
+      await vi.advanceTimersByTimeAsync(0);
       
       expect(spawn).toHaveBeenCalledTimes(2);
+      
+      // Initially starting (grace period)
+      expect(manager.get('api')?.status).toBe('starting');
+      expect(manager.get('web')?.status).toBe('starting');
+      
+      // Advance past grace period
+      await vi.advanceTimersByTimeAsync(500);
+      
       expect(manager.get('api')?.status).toBe('running');
       expect(manager.get('web')?.status).toBe('running');
+      
+      vi.useRealTimers();
+    });
+  });
+
+  describe('dependsOn', () => {
+    it('sets waiting status with waitingFor when dependencies exist', async () => {
+      const config = createConfig({
+        db: { 
+          type: 'shell', 
+          command: 'docker-compose up db',
+          readyWhen: (output) => output.includes('ready'),
+        },
+        api: { type: 'shell', command: 'npm run dev', dependsOn: ['db'] },
+      });
+      
+      const manager = new RunnableManager(config);
+      manager.init(['db', 'api']);
+      
+      // Start all - api should go to waiting state
+      manager.startAll();
+      
+      // Give it a tick to process
+      await new Promise(resolve => setImmediate(resolve));
+      
+      const apiInstance = manager.get('api');
+      expect(apiInstance?.status).toBe('waiting');
+      expect(apiInstance?.waitingFor).toEqual(['db']);
+    });
+
+    it('starts dependent after dependency becomes running', async () => {
+      vi.useFakeTimers();
+      
+      const mockProc1 = createMockProcess();
+      const mockProc2 = createMockProcess();
+      mockProc2.pid = 12346;
+      
+      vi.mocked(spawn)
+        .mockReturnValueOnce(mockProc1)
+        .mockReturnValueOnce(mockProc2);
+      
+      const config = createConfig({
+        db: { type: 'shell', command: 'docker-compose up db' },
+        api: { type: 'shell', command: 'npm run dev', dependsOn: ['db'] },
+      });
+      
+      const manager = new RunnableManager(config);
+      manager.init(['db', 'api']);
+      
+      manager.startAll();
+      
+      // Give it a tick to process
+      await vi.advanceTimersByTimeAsync(0);
+      
+      // db should be starting (grace period)
+      expect(manager.get('db')?.status).toBe('starting');
+      // api should be waiting for db
+      expect(manager.get('api')?.status).toBe('waiting');
+      
+      // Advance past grace period - db becomes running
+      await vi.advanceTimersByTimeAsync(500);
+      
+      expect(manager.get('db')?.status).toBe('running');
+      
+      // api should now be starting/running since db is running
+      await vi.advanceTimersByTimeAsync(0);
+      expect(['starting', 'running']).toContain(manager.get('api')?.status);
+      
+      vi.useRealTimers();
+    });
+
+    it('waits for multiple dependencies', async () => {
+      const mockProc1 = createMockProcess();
+      const mockProc2 = createMockProcess();
+      const mockProc3 = createMockProcess();
+      mockProc2.pid = 12346;
+      mockProc3.pid = 12347;
+      
+      vi.mocked(spawn)
+        .mockReturnValueOnce(mockProc1)
+        .mockReturnValueOnce(mockProc2)
+        .mockReturnValueOnce(mockProc3);
+      
+      const config = createConfig({
+        db: { 
+          type: 'shell', 
+          command: 'docker-compose up db',
+          readyWhen: (output) => output.includes('ready'),
+        },
+        cache: { 
+          type: 'shell', 
+          command: 'docker-compose up redis',
+          readyWhen: (output) => output.includes('ready'),
+        },
+        api: { type: 'shell', command: 'npm run dev', dependsOn: ['db', 'cache'] },
+      });
+      
+      const manager = new RunnableManager(config);
+      manager.init(['db', 'cache', 'api']);
+      
+      manager.startAll();
+      await new Promise(resolve => setImmediate(resolve));
+      
+      // api should be waiting for both
+      expect(manager.get('api')?.status).toBe('waiting');
+      expect(manager.get('api')?.waitingFor).toEqual(['db', 'cache']);
+      
+      // Make db ready
+      mockProc1.stdout.emit('data', Buffer.from('db ready\n'));
+      await new Promise(resolve => setImmediate(resolve));
+      
+      // api should still be waiting (cache not ready)
+      expect(manager.get('api')?.status).toBe('waiting');
+      
+      // Make cache ready
+      mockProc2.stdout.emit('data', Buffer.from('cache ready\n'));
+      await new Promise(resolve => setImmediate(resolve));
+      
+      // Now api should be starting/running
+      expect(['starting', 'running']).toContain(manager.get('api')?.status);
+    });
+
+    it('starts services without dependencies immediately', async () => {
+      vi.useFakeTimers();
+      
+      const config = createConfig({
+        api: { type: 'shell', command: 'npm run dev' },
+        web: { type: 'shell', command: 'npm run start' },
+      });
+      
+      const manager = new RunnableManager(config);
+      manager.init(['api', 'web']);
+      
+      manager.startAll();
+      await vi.advanceTimersByTimeAsync(0);
+      
+      // Both should be starting immediately (no waiting state)
+      expect(manager.get('api')?.status).toBe('starting');
+      expect(manager.get('web')?.status).toBe('starting');
+      
+      // After grace period, both should be running
+      await vi.advanceTimersByTimeAsync(500);
+      
+      expect(manager.get('api')?.status).toBe('running');
+      expect(manager.get('web')?.status).toBe('running');
+      
+      vi.useRealTimers();
+    });
+
+    it('throws on dependency cycle', async () => {
+      const config = createConfig({
+        a: { type: 'shell', command: 'cmd', dependsOn: ['b'] },
+        b: { type: 'shell', command: 'cmd', dependsOn: ['a'] },
+      });
+      
+      const manager = new RunnableManager(config);
+      manager.init(['a', 'b']);
+      
+      await expect(manager.startAll()).rejects.toThrow('Dependency cycle detected');
+    });
+
+    it('throws on non-existent dependency with helpful message', async () => {
+      const config = createConfig({
+        api: { type: 'shell', command: 'npm run dev', dependsOn: ['typo'] },
+        db: { type: 'shell', command: 'docker-compose up db' },
+      });
+      
+      const manager = new RunnableManager(config);
+      manager.init(['api', 'db']);
+      
+      await expect(manager.startAll()).rejects.toThrow('Unknown dependency "typo" in runnable "api"');
+    });
+
+    it('keeps dependent in waiting state when dependency fails', async () => {
+      const mockProc1 = createMockProcess();
+      
+      vi.mocked(spawn).mockReturnValueOnce(mockProc1);
+      
+      const config = createConfig({
+        db: { 
+          type: 'shell', 
+          command: 'docker-compose up db',
+          readyWhen: (output) => output.includes('ready'),
+        },
+        api: { type: 'shell', command: 'npm run dev', dependsOn: ['db'] },
+      });
+      
+      const manager = new RunnableManager(config);
+      manager.init(['db', 'api']);
+      
+      manager.startAll();
+      await new Promise(resolve => setImmediate(resolve));
+      
+      // api should be waiting
+      expect(manager.get('api')?.status).toBe('waiting');
+      
+      // db crashes
+      mockProc1.emit('exit', 1, null);
+      await new Promise(resolve => setImmediate(resolve));
+      
+      // api should still be waiting (not crashed)
+      expect(manager.get('api')?.status).toBe('waiting');
+      expect(manager.get('api')?.waitingFor).toEqual(['db']);
+    });
+
+    it('auto-starts dependent when failed dependency recovers', async () => {
+      const mockProc1 = createMockProcess();
+      const mockProc2 = createMockProcess();
+      const mockProc3 = createMockProcess();
+      mockProc2.pid = 12346;
+      mockProc3.pid = 12347;
+      
+      vi.mocked(spawn)
+        .mockReturnValueOnce(mockProc1)
+        .mockReturnValueOnce(mockProc2)
+        .mockReturnValueOnce(mockProc3);
+      
+      const config = createConfig({
+        db: { 
+          type: 'shell', 
+          command: 'docker-compose up db',
+          readyWhen: (output) => output.includes('ready'),
+        },
+        api: { type: 'shell', command: 'npm run dev', dependsOn: ['db'] },
+      });
+      
+      const manager = new RunnableManager(config);
+      manager.init(['db', 'api']);
+      
+      manager.startAll();
+      await new Promise(resolve => setImmediate(resolve));
+      
+      // api should be waiting
+      expect(manager.get('api')?.status).toBe('waiting');
+      
+      // db crashes
+      mockProc1.emit('exit', 1, null);
+      await new Promise(resolve => setImmediate(resolve));
+      
+      // api still waiting
+      expect(manager.get('api')?.status).toBe('waiting');
+      
+      // Restart db manually
+      await manager.start('db');
+      await new Promise(resolve => setImmediate(resolve));
+      
+      // db still starting (has readyWhen)
+      expect(manager.get('db')?.status).toBe('starting');
+      
+      // Make db ready
+      mockProc2.stdout.emit('data', Buffer.from('db ready\n'));
+      await new Promise(resolve => setImmediate(resolve));
+      
+      // Now api should auto-start via dependency watcher
+      expect(['starting', 'running']).toContain(manager.get('api')?.status);
     });
   });
 });

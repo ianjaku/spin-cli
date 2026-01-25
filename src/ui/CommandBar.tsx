@@ -1,50 +1,34 @@
-import React from 'react';
-import { Box, Text } from 'ink';
+import React from "react";
+import { Box, Text } from "ink";
 
 interface CommandBarProps {
   message?: string;
+  backgroundScriptsCount?: number;
 }
 
-interface Shortcut {
-  key: string;
-  label: string;
-}
-
-const SHORTCUTS: Shortcut[] = [
-  { key: '1-9', label: 'switch' },
-  { key: 'j/k', label: 'scroll' },
-  { key: 'f', label: 'follow' },
-  { key: 'r', label: 'restart' },
-  { key: 's', label: 'stop' },
-  { key: 'a', label: 'start' },
-  { key: 'q', label: 'quit' },
-  { key: '?', label: 'help' },
-];
-
-export function CommandBar({ message }: CommandBarProps) {
+/** Renders a key + description hint */
+function Hint({ keyName, desc }: { keyName: string; desc: string }) {
   return (
-    <Box 
-      paddingX={1} 
-      justifyContent="space-between"
-      borderStyle="single"
-      borderTop
-      borderBottom={false}
-      borderLeft={false}
-      borderRight={false}
-    >
-      <Box gap={1}>
-        {SHORTCUTS.map(({ key, label }) => (
-          <Box key={key} gap={0}>
-            <Text bold color="cyan">{key}</Text>
-            <Text dimColor>:{label}</Text>
-            <Text> </Text>
-          </Box>
-        ))}
+    <Box>
+      <Text backgroundColor="#1a1a1a" dimColor>{` ${keyName} `}</Text>
+      <Text dimColor> {desc}</Text>
+    </Box>
+  );
+}
+
+export function CommandBar({ message, backgroundScriptsCount = 0 }: CommandBarProps) {
+  return (
+    <Box paddingX={2} justifyContent="space-between">
+      <Box gap={2}>
+        <Hint keyName="1-9" desc="switch" />
+        <Hint keyName="j/k" desc="scroll" />
+        <Hint keyName="r" desc="restart" />
+        <Hint keyName=":" desc="run" />
+        {backgroundScriptsCount > 0 && <Hint keyName="b" desc={`bg (${backgroundScriptsCount})`} />}
+        <Hint keyName="?" desc="help" />
+        <Hint keyName="q" desc="quit" />
       </Box>
-      
-      {message && (
-        <Text color="yellow">{message}</Text>
-      )}
+      {message && <Text color="yellow">{message}</Text>}
     </Box>
   );
 }

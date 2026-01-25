@@ -145,7 +145,8 @@ Options:
       manager={manager} 
       registry={registry}
       shellCommands={shellCommands}
-    />
+    />,
+    { exitOnCtrlC: false }
   );
   await ink.start();
   

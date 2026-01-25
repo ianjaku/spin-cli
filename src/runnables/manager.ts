@@ -148,13 +148,23 @@ export class RunnableManager extends EventEmitter<ManagerEvents> {
       this.setStatus(id, 'error', err.message);
     });
     
-    // Check for ready condition or just mark as running
+    // Check for ready condition or use a grace period
     if (definition.readyWhen) {
       // Will be marked as running when readyWhen returns true
       // (handled in addOutput)
     } else {
-      // No readyWhen, mark as running immediately
-      this.setStatus(id, 'running');
+      // No readyWhen - use a grace period before marking as running
+      // This allows fast-failing processes (like invalid docker images) to error
+      // before dependents start
+      const graceTimer = setTimeout(() => {
+        // Only mark running if still in starting state (not errored)
+        if (instance.status === 'starting') {
+          this.setStatus(id, 'running');
+        }
+      }, 500);
+      
+      // Clean up timer if process exits before grace period
+      proc.once('exit', () => clearTimeout(graceTimer));
     }
   }
   
@@ -214,13 +224,18 @@ export class RunnableManager extends EventEmitter<ManagerEvents> {
   }
   
   /**
-   * Start all initialized runnables.
+   * Start all initialized runnables in dependency order.
    */
   async startAll(): Promise<void> {
-    // TODO: Handle dependsOn ordering
-    await Promise.all(
-      Array.from(this.instances.keys()).map(id => this.start(id))
-    );
+    const order = this.getTopologicalOrder();
+
+    // Start dependency watcher for recovery
+    this.setupDependencyWatcher();
+
+    for (const id of order) {
+      // Don't await - let them run, waitForRunning handles ordering
+      this.startWithDeps(id);
+    }
   }
   
   private setStatus(id: string, status: RunnableStatus, error?: string): void {
@@ -343,5 +358,145 @@ export class RunnableManager extends EventEmitter<ManagerEvents> {
     }, 50);
 
     this.readyCheckTimers.set(id, timer);
+  }
+
+  /**
+   * Get runnables in topological order based on dependsOn.
+   * Validates dependencies exist and detects cycles.
+   */
+  private getTopologicalOrder(): string[] {
+    const ids = Array.from(this.instances.keys());
+
+    // Validate all dependencies exist
+    for (const id of ids) {
+      const deps = this.instances.get(id)?.definition.dependsOn ?? [];
+      for (const dep of deps) {
+        if (!this.instances.has(dep)) {
+          throw new Error(
+            `Unknown dependency "${dep}" in runnable "${id}".\n\n` +
+            `  dependsOn: ["${dep}"]  ← not found\n\n` +
+            `Available runnables: ${ids.join(', ')}`
+          );
+        }
+      }
+    }
+
+    // Kahn's algorithm for topological sort
+    const inDegree = new Map<string, number>();
+    const graph = new Map<string, string[]>(); // dependency -> dependents
+
+    for (const id of ids) {
+      inDegree.set(id, 0);
+      graph.set(id, []);
+    }
+
+    for (const id of ids) {
+      const deps = this.instances.get(id)?.definition.dependsOn ?? [];
+      inDegree.set(id, deps.length);
+      for (const dep of deps) {
+        graph.get(dep)?.push(id);
+      }
+    }
+
+    const queue = ids.filter(id => inDegree.get(id) === 0);
+    const sorted: string[] = [];
+
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      sorted.push(current);
+      for (const dependent of graph.get(current) ?? []) {
+        const newDegree = (inDegree.get(dependent) ?? 1) - 1;
+        inDegree.set(dependent, newDegree);
+        if (newDegree === 0) queue.push(dependent);
+      }
+    }
+
+    if (sorted.length !== ids.length) {
+      const cycle = ids.filter(id => (inDegree.get(id) ?? 0) > 0);
+      throw new Error(`Dependency cycle detected: ${cycle.join(', ')}`);
+    }
+
+    return sorted;
+  }
+
+  /**
+   * Wait for a runnable to reach 'running' status.
+   * Rejects if the runnable errors or stops.
+   */
+  private waitForRunning(id: string): Promise<void> {
+    const instance = this.instances.get(id);
+    if (!instance) return Promise.reject(new Error(`Unknown runnable: ${id}`));
+    if (instance.status === 'running') return Promise.resolve();
+
+    return new Promise((resolve, reject) => {
+      const handler = (changedId: string, status: RunnableStatus) => {
+        if (changedId !== id) return;
+        if (status === 'running') {
+          this.off('status-change', handler);
+          resolve();
+        } else if (status === 'error' || status === 'stopped') {
+          this.off('status-change', handler);
+          reject(new Error(`Dependency "${id}" failed to start`));
+        }
+      };
+      this.on('status-change', handler);
+    });
+  }
+
+  /**
+   * Start a runnable, waiting for its dependencies first.
+   */
+  private async startWithDeps(id: string): Promise<void> {
+    const instance = this.instances.get(id);
+    if (!instance) return;
+
+    const deps = instance.definition.dependsOn ?? [];
+    if (deps.length === 0) {
+      return this.start(id);
+    }
+
+    // Set waiting state with dependency list
+    instance.waitingFor = [...deps];
+    this.setStatus(id, 'waiting');
+
+    try {
+      await Promise.all(deps.map(dep => this.waitForRunning(dep)));
+      instance.waitingFor = undefined;
+      await this.start(id);
+    } catch {
+      // Dependency failed - stay in waiting state, watcher will retry
+      // Don't clear waitingFor so UI can show which dep failed
+    }
+  }
+
+  private dependencyWatcherSetup = false;
+
+  /**
+   * Set up a watcher to auto-start dependents when failed deps recover.
+   */
+  private setupDependencyWatcher(): void {
+    if (this.dependencyWatcherSetup) return;
+    this.dependencyWatcherSetup = true;
+
+    // Watch for dependencies becoming running and retry waiting dependents
+    this.on('status-change', (changedId, status) => {
+      if (status !== 'running') return;
+
+      // Find any instances waiting for this dependency
+      for (const [id, instance] of this.instances) {
+        if (instance.status === 'waiting' && instance.waitingFor?.includes(changedId)) {
+          // Check if all deps are now running
+          const allDepsRunning = instance.waitingFor.every(depId => {
+            const dep = this.instances.get(depId);
+            return dep?.status === 'running';
+          });
+
+          if (allDepsRunning) {
+            instance.waitingFor = undefined;
+            this.start(id);
+          }
+        }
+      }
+    });
   }
 }

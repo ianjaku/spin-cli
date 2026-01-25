@@ -4,7 +4,7 @@ import type { ChildProcess } from 'node:child_process';
 // Runnable Status
 // ============================================================================
 
-export type RunnableStatus = 'stopped' | 'starting' | 'running' | 'error';
+export type RunnableStatus = 'stopped' | 'waiting' | 'starting' | 'running' | 'error';
 
 // ============================================================================
 // Runnable Definition (what users define in config)
@@ -52,6 +52,8 @@ export interface RunnableInstance {
   error?: string;
   /** Timestamp when started */
   startedAt?: Date;
+  /** IDs of dependencies this instance is waiting for (when status is 'waiting') */
+  waitingFor?: string[];
 }
 
 // ============================================================================
@@ -87,6 +89,31 @@ export type DockerOptions = Omit<RunnableDefinition, 'type' | 'command'> & {
   ports?: string[];
   volumes?: string[];
 };
+
+// ============================================================================
+// Background Scripts (ad-hoc commands run from palette)
+// ============================================================================
+
+export type BackgroundScriptStatus = 'running' | 'success' | 'error';
+
+export interface BackgroundScript {
+  /** Unique identifier (timestamp-based) */
+  id: string;
+  /** Command that was run */
+  command: string;
+  /** Working directory */
+  cwd: string;
+  /** Captured output lines */
+  output: string[];
+  /** Current status */
+  status: BackgroundScriptStatus;
+  /** Exit code (if finished) */
+  exitCode: number | null;
+  /** Duration in milliseconds */
+  duration: number;
+  /** Timestamp when started */
+  startedAt: number;
+}
 
 // ============================================================================
 // Scripts

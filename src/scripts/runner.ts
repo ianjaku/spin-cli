@@ -18,6 +18,7 @@ export class ScriptRunner extends EventEmitter<RunnerEvents> {
   private _status: ScriptRunnerStatus = 'idle';
   private _output: string[] = [];
   private _startTime: number = 0;
+  private _endTime: number = 0;
 
   get status(): ScriptRunnerStatus {
     return this._status;
@@ -29,6 +30,9 @@ export class ScriptRunner extends EventEmitter<RunnerEvents> {
 
   get duration(): number {
     if (this._startTime === 0) return 0;
+    // If script has finished, return the captured duration
+    if (this._endTime > 0) return this._endTime - this._startTime;
+    // Otherwise return live duration
     return Date.now() - this._startTime;
   }
 
@@ -44,11 +48,14 @@ export class ScriptRunner extends EventEmitter<RunnerEvents> {
     this._status = 'running';
     this._output = [];
     this._startTime = Date.now();
+    this._endTime = 0;
 
     // Parse command - use shell for complex commands
+    // detach: true allows proper process group killing
     const proc = spawn(command, {
       cwd,
       shell: true,
+      detached: true,
       env: {
         ...process.env,
         FORCE_COLOR: '1',
@@ -84,6 +91,7 @@ export class ScriptRunner extends EventEmitter<RunnerEvents> {
     proc.on('exit', (code, signal) => {
       this.process = null;
       this._status = code === 0 ? 'success' : 'error';
+      this._endTime = Date.now();
       this.emit('exit', code, signal);
     });
 
@@ -140,5 +148,6 @@ export class ScriptRunner extends EventEmitter<RunnerEvents> {
     this._status = 'idle';
     this._output = [];
     this._startTime = 0;
+    this._endTime = 0;
   }
 }
