@@ -17,24 +17,37 @@ import type { SpinConfig } from '../types.js';
 import type { ServiceInfo, LogEntry } from './types.js';
 
 /**
+ * Tool definition type for MCP tools
+ */
+interface ToolDefinition {
+  name: string;
+  description: string;
+  inputSchema: {
+    type: 'object';
+    properties: Record<string, { type: string; description: string }>;
+    required: string[];
+  };
+}
+
+/**
  * Tool definitions - varies based on whether spin is running
  */
-function getToolDefinitions(spinRunning: boolean) {
-  const tools = [
+function getToolDefinitions(spinRunning: boolean): ToolDefinition[] {
+  const tools: ToolDefinition[] = [
     {
       name: 'list_services',
       description: 'List all configured services and their current status',
       inputSchema: {
-        type: 'object' as const,
+        type: 'object',
         properties: {},
-        required: [] as string[],
+        required: [],
       },
     },
     {
       name: 'get_service_status',
       description: 'Get detailed status of a specific service',
       inputSchema: {
-        type: 'object' as const,
+        type: 'object',
         properties: {
           service: {
             type: 'string',
@@ -48,44 +61,40 @@ function getToolDefinitions(spinRunning: boolean) {
 
   if (spinRunning) {
     // Additional tools when spin TUI is running
-    tools.push(
-      {
-        name: 'get_logs',
-        description: 'Get recent logs from a service',
-        inputSchema: {
-          type: 'object' as const,
-          properties: {
-            service: {
-              type: 'string',
-              description: 'The service ID to get logs from',
-            },
-            lines: {
-              type: 'number',
-              description: 'Number of lines to return (default: 50)',
-            },
+    tools.push({
+      name: 'get_logs',
+      description: 'Get recent logs from a service',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          service: {
+            type: 'string',
+            description: 'The service ID to get logs from',
           },
-          required: ['service'],
+          lines: {
+            type: 'number',
+            description: 'Number of lines to return (default: 50)',
+          },
         },
+        required: ['service'],
       },
-    );
+    });
   } else {
     // Tool to start spin when not running
-    tools.push(
-      {
-        name: 'start_spin',
-        description: 'Start the spin development environment. Returns the command to run.',
-        inputSchema: {
-          type: 'object' as const,
-          properties: {
-            group: {
-              type: 'string',
-              description: 'Optional group name to start (e.g., "dev", "backend")',
-            },
+    tools.push({
+      name: 'start_spin',
+      description: 'Start the spin development environment. Returns the command to run.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          group: {
+            type: 'string',
+            description: 'Optional group name to start (e.g., "dev", "backend")',
           },
-          required: [] as string[],
         },
+        required: [],
       },
-    );
+    });
   }
 
   return tools;
@@ -198,7 +207,8 @@ export async function startMcpServer(): Promise<void> {
   let config: SpinConfig;
   try {
     process.chdir(projectRoot);
-    config = await loadConfig();
+    const loaded = await loadConfig();
+    config = loaded.config;
   } catch (error) {
     console.error(`Error loading config: ${error instanceof Error ? error.message : error}`);
     process.exit(1);

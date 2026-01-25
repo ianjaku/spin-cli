@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import type { RunnableStatus } from '../types.js';
+import { findConfigRoot } from '../config/loader.js';
 
 /**
  * State written by the spin TUI process
@@ -125,48 +126,21 @@ function isProcessRunning(pid: number): boolean {
  * Find state for the current directory by looking up the directory tree
  */
 export function findStateForCurrentDir(): SpinState | null {
-  let dir = process.cwd();
-  const root = '/';
-  
-  while (dir !== root) {
-    const state = readState(dir);
-    if (state) {
-      return state;
-    }
-    
-    // Check if this directory has a spin.config.ts (might not be running)
-    const configPath = join(dir, 'spin.config.ts');
-    if (existsSync(configPath)) {
-      // Found a project root, but spin isn't running
-      return null;
-    }
-    
-    // Move up one directory
-    const parent = join(dir, '..');
-    if (parent === dir) break;
-    dir = parent;
+  // Use findConfigRoot to locate the project root
+  const found = findConfigRoot();
+  if (!found) {
+    return null;
   }
   
-  return null;
+  // Check if spin is running for this project
+  const state = readState(found.projectRoot);
+  return state;
 }
 
 /**
  * Find project root by looking for spin.config.ts
  */
 export function findProjectRoot(): string | null {
-  let dir = process.cwd();
-  const root = '/';
-  
-  while (dir !== root) {
-    const configPath = join(dir, 'spin.config.ts');
-    if (existsSync(configPath)) {
-      return dir;
-    }
-    
-    const parent = join(dir, '..');
-    if (parent === dir) break;
-    dir = parent;
-  }
-  
-  return null;
+  const found = findConfigRoot();
+  return found ? found.projectRoot : null;
 }

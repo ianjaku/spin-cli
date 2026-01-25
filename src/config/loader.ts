@@ -1,6 +1,6 @@
 import { createJiti } from 'jiti';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import type { SpinConfig } from '../types.js';
 import { ScriptRegistry } from '../scripts/registry.js';
 import { ensureSpinFolder } from '../spin-folder/index.js';
@@ -12,31 +12,54 @@ const CONFIG_NAMES = [
 ];
 
 /**
- * Find and load the spin config file from the current directory.
+ * Find the config file by traversing up the directory tree.
+ * Returns the config path and project root, or null if not found.
  */
-export async function loadConfig(cwd: string = process.cwd()): Promise<SpinConfig> {
-  // Ensure .spin/cli.ts exists if the config uses it
-  // This must happen BEFORE loading config so imports resolve
-  ensureSpinFolder(cwd);
-  
-  // Find config file
-  let configPath: string | null = null;
-  
-  for (const name of CONFIG_NAMES) {
-    const fullPath = join(cwd, name);
-    if (existsSync(fullPath)) {
-      configPath = fullPath;
-      break;
+export function findConfigRoot(
+  startDir: string = process.cwd()
+): { configPath: string; projectRoot: string } | null {
+  let dir = startDir;
+
+  while (true) {
+    for (const name of CONFIG_NAMES) {
+      const fullPath = join(dir, name);
+      if (existsSync(fullPath)) {
+        return { configPath: fullPath, projectRoot: dir };
+      }
     }
+
+    const parent = dirname(dir);
+    if (parent === dir) break; // Reached filesystem root
+    dir = parent;
   }
+
+  return null;
+}
+
+/**
+ * Find and load the spin config file by searching up the directory tree.
+ * Returns both the config and the project root directory.
+ */
+export async function loadConfig(
+  startDir: string = process.cwd()
+): Promise<{ config: SpinConfig; projectRoot: string }> {
+  // Find config file by traversing up the directory tree
+  const found = findConfigRoot(startDir);
   
-  if (!configPath) {
+  if (!found) {
     throw new Error(
-      `Could not find spin config file. Create one of:\n` +
+      `Could not find spin config file (searched from ${startDir} up to filesystem root).\n` +
+      `Create one of:\n` +
       CONFIG_NAMES.map(n => `  - ${n}`).join('\n') +
       `\n\nOr run 'spin init' to create one.`
     );
   }
+  
+  const { configPath, projectRoot } = found;
+  
+  // Ensure .spin/cli.ts exists if the config uses it
+  // This must happen BEFORE loading config so imports resolve
+  ensureSpinFolder(projectRoot, configPath);
   
   // Load config using jiti (handles TypeScript)
   const jiti = createJiti(import.meta.url, {
@@ -47,7 +70,7 @@ export async function loadConfig(cwd: string = process.cwd()): Promise<SpinConfi
   
   try {
     const module = await jiti.import(configPath, { default: true });
-    return module as SpinConfig;
+    return { config: module as SpinConfig, projectRoot };
   } catch (error) {
     throw new Error(
       `Failed to load config from ${configPath}:\n${error instanceof Error ? error.message : error}`

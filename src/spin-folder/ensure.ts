@@ -16,11 +16,14 @@ const CLI_FILE = 'cli.ts';
  * Only generates the file if:
  * 1. A spin.config.ts exists (user has initialized spin)
  * 2. The .spin folder exists OR config imports from ./.spin/cli
+ * 
+ * @param projectRoot - The project root directory (where spin.config.ts lives)
+ * @param knownConfigPath - Optional: if already known, pass the config path to avoid re-searching
  */
-export function ensureSpinFolder(cwd: string): void {
-  const spinFolder = join(cwd, SPIN_FOLDER);
+export function ensureSpinFolder(projectRoot: string, knownConfigPath?: string): void {
+  const spinFolder = join(projectRoot, SPIN_FOLDER);
   const cliFile = join(spinFolder, CLI_FILE);
-  const configPath = findConfigFile(cwd);
+  const configPath = knownConfigPath ?? findConfigFile(projectRoot);
   
   // No config file = nothing to do
   if (!configPath) {

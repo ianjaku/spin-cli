@@ -1,7 +1,7 @@
 import React from 'react';
 import { withFullScreen } from 'fullscreen-ink';
 import { App } from './ui/App.js';
-import { loadConfig, resolveTargets, createScriptRegistry } from './config/loader.js';
+import { loadConfig, resolveTargets, createScriptRegistry, findConfigRoot } from './config/loader.js';
 import { RunnableManager } from './runnables/manager.js';
 import { defaultShellCommands } from './scripts/helpers.js';
 import { generateCliFileContent, getSpinVersion, ensureSpinFolder, getSpinFolderPath } from './spin-folder/index.js';
@@ -88,10 +88,13 @@ Options:
     return;
   }
   
-  // Load config
+  // Load config (searches up the directory tree)
   let config;
+  let projectRoot: string;
   try {
-    config = await loadConfig();
+    const loaded = await loadConfig();
+    config = loaded.config;
+    projectRoot = loaded.projectRoot;
   } catch (error) {
     console.error(`Error: ${error instanceof Error ? error.message : error}`);
     process.exit(1);
@@ -134,7 +137,6 @@ Options:
   
   // Start the state writer (for MCP server to read)
   const { join } = await import('node:path');
-  const projectRoot = process.cwd();
   const configPath = join(projectRoot, 'spin.config.ts');
   const stateWriter = new StateWriter(manager, projectRoot, configPath);
   stateWriter.start();
@@ -180,7 +182,8 @@ Options:
 async function listCommand() {
   let config;
   try {
-    config = await loadConfig();
+    const loaded = await loadConfig();
+    config = loaded.config;
   } catch (error) {
     console.error(`Error: ${error instanceof Error ? error.message : error}`);
     process.exit(1);
@@ -334,10 +337,17 @@ async function uninstallCommand(options: UninstallOptions = {}) {
   const { existsSync, rmSync, readFileSync, writeFileSync } = await import('node:fs');
   const { join } = await import('node:path');
   
-  const cwd = process.cwd();
-  const spinFolder = join(cwd, '.spin');
-  const configPath = join(cwd, 'spin.config.ts');
-  const gitignorePath = join(cwd, '.gitignore');
+  // Find project root by traversing up
+  const found = findConfigRoot();
+  if (!found) {
+    console.log('Nothing to uninstall. Could not find spin.config.ts (searched up to filesystem root).');
+    return;
+  }
+  
+  const { projectRoot } = found;
+  const spinFolder = join(projectRoot, '.spin');
+  const configPath = join(projectRoot, 'spin.config.ts');
+  const gitignorePath = join(projectRoot, '.gitignore');
   
   // Check if there's anything to uninstall
   const hasSpinFolder = existsSync(spinFolder);
@@ -452,8 +462,16 @@ async function mcpUpdateCommand() {
   const { existsSync, writeFileSync, mkdirSync } = await import('node:fs');
   const { join } = await import('node:path');
   
-  const cwd = process.cwd();
-  const spinFolder = getSpinFolderPath(cwd);
+  // Find project root by traversing up
+  const found = findConfigRoot();
+  if (!found) {
+    console.error('Error: Could not find spin.config.ts (searched up to filesystem root).');
+    console.error('Run `spin init` to initialize spin in your project.');
+    process.exit(1);
+  }
+  
+  const { projectRoot } = found;
+  const spinFolder = getSpinFolderPath(projectRoot);
   const cliFilePath = join(spinFolder, 'cli.ts');
   const gitignorePath = join(spinFolder, '.gitignore');
   
