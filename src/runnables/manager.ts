@@ -10,6 +10,10 @@ import type {
 
 const MAX_OUTPUT_LINES = 1000;
 
+// Strip ANSI escape codes from output for readyWhen detection
+const stripAnsi = (str: string): string =>
+  str.replace(/\x1b\[[0-9;]*m/g, '');
+
 interface ManagerEvents {
   'status-change': [id: string, status: RunnableStatus, error?: string];
   'output': [id: string, line: string, stream: 'stdout' | 'stderr'];
@@ -271,7 +275,8 @@ export class RunnableManager extends EventEmitter<ManagerEvents> {
     // Check readyWhen immediately after new output
     if (instance.status === 'starting' && instance.definition.readyWhen) {
       const allOutput = this.getOutputLines(id, 'all').join('\n');
-      if (instance.definition.readyWhen(allOutput)) {
+      // Strip ANSI codes so users can match plain text like "Local:"
+      if (instance.definition.readyWhen(stripAnsi(allOutput))) {
         this.setStatus(id, 'running');
       }
     }
@@ -352,7 +357,8 @@ export class RunnableManager extends EventEmitter<ManagerEvents> {
       }
 
       const allOutput = this.getOutputLines(id, 'all').join('\n');
-      if (instance.definition.readyWhen(allOutput)) {
+      // Strip ANSI codes so users can match plain text like "Local:"
+      if (instance.definition.readyWhen(stripAnsi(allOutput))) {
         this.setStatus(id, 'running');
       }
     }, 50);
