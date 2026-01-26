@@ -338,18 +338,18 @@ export function App({
       return;
     }
 
-    // Tab to cycle through services and background scripts
-    if (key.tab) {
+    // Shift+Tab to cycle backwards (must check before plain tab)
+    if (key.shift && key.tab) {
       if (totalTabs > 0) {
-        setActiveIndex((i) => (i + 1) % totalTabs);
+        setActiveIndex((i) => (i - 1 + totalTabs) % totalTabs);
       }
       return;
     }
 
-    // Shift+Tab to cycle backwards
-    if (key.shift && key.tab) {
+    // Tab to cycle through services and background scripts
+    if (key.tab) {
       if (totalTabs > 0) {
-        setActiveIndex((i) => (i - 1 + totalTabs) % totalTabs);
+        setActiveIndex((i) => (i + 1) % totalTabs);
       }
       return;
     }

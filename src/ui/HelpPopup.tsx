@@ -10,6 +10,7 @@ interface HelpPopupProps {
 const COMMANDS = [
   { key: "1-9", desc: "switch service" },
   { key: "tab", desc: "next service" },
+  { key: "S-tab", desc: "prev service" },
   { key: "j/k", desc: "scroll" },
   { key: "g/G", desc: "top/bottom" },
   { key: "f", desc: "follow mode" },
