@@ -44,11 +44,11 @@ export function LogViewer({
   useInput((input, key) => {
     if (!isActive) return;
 
-    // j/down - scroll down
+    // j/down - scroll down (3 lines at a time)
     if (input === "j" || key.downArrow) {
       const maxOffset = Math.max(0, lines.length - visibleLines);
       setScrollOffset((o) => {
-        const newOffset = Math.min(o + 1, maxOffset);
+        const newOffset = Math.min(o + 3, maxOffset);
         // Auto-enable follow mode when reaching bottom
         if (newOffset >= maxOffset) {
           setFollowMode(true);
@@ -59,10 +59,10 @@ export function LogViewer({
       });
     }
 
-    // k/up - scroll up
+    // k/up - scroll up (3 lines at a time)
     if (input === "k" || key.upArrow) {
       setFollowMode(false);
-      setScrollOffset((o) => Math.max(0, o - 1));
+      setScrollOffset((o) => Math.max(0, o - 3));
     }
 
     // ctrl+d - page down

@@ -40,6 +40,12 @@ export interface RunnableDefinition {
   readyWhen?: (output: string) => boolean;
   /** Callback invoked once when service becomes ready (after readyWhen matches) */
   onReady?: (context: OnReadyContext) => void | Promise<void>;
+  /** 
+   * Allocate a pseudo-TTY for the process using node-pty.
+   * This allows TUI programs (like ngrok, htop) to display properly
+   * by emulating a real terminal and parsing escape codes.
+   */
+  pty?: boolean;
 }
 
 // ============================================================================

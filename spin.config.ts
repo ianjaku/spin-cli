@@ -11,11 +11,13 @@ export default defineConfig({
   runnables: {
 
     ngrok: shell("ngrok http 3000", {
+      pty: true, // Use PTY to capture TUI output properly
       readyWhen: (output) => output.includes('Forwarding'),
       onReady: ({ output, setEnv }) => {
-        const url = output.match(/https:\/\/[^\s]+\.ngrok\.io/)?.[0];
-        if (!url) throw new Error('No ngrok URL found');
-        setEnv('NGROK_URL', url);
+        // Extract the ngrok URL from the TUI output
+        const urlMatch = output.match(/https:\/\/[^\s]+\.ngrok[^\s]*/);
+        if (!urlMatch) throw new Error('No ngrok URL found in output');
+        setEnv('NGROK_URL', urlMatch[0]);
       },
     }),
 

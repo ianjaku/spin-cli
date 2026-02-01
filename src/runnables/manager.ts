@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { OutputBuffer } from './outputBuffer.js';
+import { PtyProcess } from './ptyProcess.js';
 import type { 
   SpinConfig, 
   RunnableDefinition, 
@@ -31,6 +32,8 @@ export class RunnableManager extends EventEmitter<ManagerEvents> {
   private runtimeEnv: Map<string, Record<string, string>> = new Map();
   /** Track which runnables have had their onReady invoked (once-only guard) */
   private onReadyCalled: Set<string> = new Set();
+  /** Track PTY processes separately (they have a different API than ChildProcess) */
+  private ptyProcesses: Map<string, PtyProcess> = new Map();
   
   constructor(config: SpinConfig) {
     super();
@@ -131,75 +134,136 @@ export class RunnableManager extends EventEmitter<ManagerEvents> {
     }
     
     // Spawn the process
-    const [cmd, ...args] = definition.command.split(' ');
-    
-    const proc = spawn(cmd, args, {
-      cwd: definition.cwd,
-      env: {
-        ...process.env,
-        ...this.config.defaults?.env,
-        ...definition.env,
-        ...additionalEnv, // Inherited runtime env from dependencies
-        FORCE_COLOR: '1', // Preserve colors in output
-      },
-      shell: true,
-      detached: true, // Create a new process group so we can kill the entire tree
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    
-    instance.process = proc;
     instance.startedAt = new Date();
     
-    // Handle stdout
-    proc.stdout?.on('data', (data: Buffer) => {
-      const lines = data.toString().split('\n').filter(Boolean);
-      for (const line of lines) {
-        this.addOutput(id, line, 'stdout');
-      }
-    });
-    
-    // Handle stderr
-    proc.stderr?.on('data', (data: Buffer) => {
-      const lines = data.toString().split('\n').filter(Boolean);
-      for (const line of lines) {
-        this.addOutput(id, line, 'stderr');
-      }
-    });
-    
-    // Handle process exit
-    proc.on('exit', (code, signal) => {
-      instance.process = null;
+    if (definition.pty) {
+      // Use node-pty + xterm-headless for proper PTY support
+      // This allows TUI programs like ngrok to display properly
+      const ptyProc = new PtyProcess({
+        command: definition.command,
+        cwd: definition.cwd,
+        env: {
+          ...this.config.defaults?.env,
+          ...definition.env,
+          ...additionalEnv,
+          FORCE_COLOR: '1',
+        },
+      });
       
-      if (code === 0 || signal === 'SIGTERM' || signal === 'SIGINT') {
-        this.setStatus(id, 'stopped');
-      } else {
-        this.setStatus(id, 'error', `Exited with code ${code}`);
-      }
-    });
-    
-    proc.on('error', (err) => {
-      instance.process = null;
-      this.setStatus(id, 'error', err.message);
-    });
-    
-    // Check for ready condition or use a grace period
-    if (definition.readyWhen) {
-      // Will be marked as running when readyWhen returns true
-      // (handled in addOutput)
+      this.ptyProcesses.set(id, ptyProc);
+      
+      // Handle screen refresh (replaces entire output for TUI programs)
+      ptyProc.on('screen-refresh', (lines) => {
+        this.replaceOutput(id, lines);
+      });
+      
+      // Handle individual output lines (for readyWhen detection)
+      ptyProc.on('output', (line) => {
+        // Don't add to buffer (screen-refresh handles that)
+        // Just check readyWhen
+        this.checkReadyWhen(id, line);
+      });
+      
+      // Handle process exit
+      ptyProc.on('exit', (code) => {
+        this.ptyProcesses.delete(id);
+        instance.process = null;
+        
+        if (code === 0) {
+          this.setStatus(id, 'stopped');
+        } else {
+          this.setStatus(id, 'error', `Exited with code ${code}`);
+        }
+      });
+      
+      // Handle errors
+      ptyProc.on('error', (err) => {
+        this.ptyProcesses.delete(id);
+        instance.process = null;
+        this.setStatus(id, 'error', err.message);
+      });
+      
+      // Start the PTY process
+      ptyProc.start();
+      
+      // Store a fake process object for compatibility
+      // (the actual PTY process is managed separately)
+      instance.process = { pid: ptyProc.processId } as ChildProcess;
+      
     } else {
-      // No readyWhen - use a grace period before marking as running
-      // This allows fast-failing processes (like invalid docker images) to error
-      // before dependents start
+      // Standard process spawning (no PTY)
+      const [cmd, ...args] = definition.command.split(' ');
+      
+      const proc = spawn(cmd, args, {
+        cwd: definition.cwd,
+        env: {
+          ...process.env,
+          ...this.config.defaults?.env,
+          ...definition.env,
+          ...additionalEnv, // Inherited runtime env from dependencies
+          FORCE_COLOR: '1', // Preserve colors in output
+        },
+        shell: true,
+        detached: true, // Create a new process group so we can kill the entire tree
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      
+      instance.process = proc;
+      
+      // Handle stdout
+      proc.stdout?.on('data', (data: Buffer) => {
+        const lines = data.toString().split('\n').filter(Boolean);
+        for (const line of lines) {
+          this.addOutput(id, line, 'stdout');
+        }
+      });
+      
+      // Handle stderr
+      proc.stderr?.on('data', (data: Buffer) => {
+        const lines = data.toString().split('\n').filter(Boolean);
+        for (const line of lines) {
+          this.addOutput(id, line, 'stderr');
+        }
+      });
+      
+      // Handle process exit
+      proc.on('exit', (code, signal) => {
+        instance.process = null;
+        
+        if (code === 0 || signal === 'SIGTERM' || signal === 'SIGINT') {
+          this.setStatus(id, 'stopped');
+        } else {
+          this.setStatus(id, 'error', `Exited with code ${code}`);
+        }
+      });
+      
+      proc.on('error', (err) => {
+        instance.process = null;
+        this.setStatus(id, 'error', err.message);
+      });
+      
+      // Check for ready condition or use a grace period (standard process)
+      if (!definition.readyWhen) {
+        const graceTimer = setTimeout(async () => {
+          if (instance.status === 'starting') {
+            await this.invokeOnReady(id);
+            this.setStatus(id, 'running');
+          }
+        }, 500);
+        proc.once('exit', () => clearTimeout(graceTimer));
+      }
+    }
+    
+    // For PTY processes without readyWhen, use grace period
+    if (definition.pty && !definition.readyWhen) {
+      const ptyProc = this.ptyProcesses.get(id);
       const graceTimer = setTimeout(async () => {
-        // Only mark running if still in starting state (not errored)
         if (instance.status === 'starting') {
           await this.invokeOnReady(id);
           this.setStatus(id, 'running');
         }
       }, 500);
-      
-      // Clean up timer if process exits before grace period
-      proc.once('exit', () => clearTimeout(graceTimer));
+      ptyProc?.on('exit', () => clearTimeout(graceTimer));
     }
   }
   
@@ -208,7 +272,31 @@ export class RunnableManager extends EventEmitter<ManagerEvents> {
    */
   async stop(id: string): Promise<void> {
     const instance = this.instances.get(id);
-    if (!instance || !instance.process) {
+    if (!instance) {
+      return;
+    }
+    
+    // Check if this is a PTY process
+    const ptyProc = this.ptyProcesses.get(id);
+    if (ptyProc) {
+      return new Promise((resolve) => {
+        ptyProc.on('exit', () => {
+          resolve();
+        });
+        
+        ptyProc.kill('SIGTERM');
+        
+        // Force kill after timeout
+        setTimeout(() => {
+          if (this.ptyProcesses.has(id)) {
+            ptyProc.kill('SIGKILL');
+          }
+        }, 5000);
+      });
+    }
+    
+    // Standard process
+    if (!instance.process) {
       return;
     }
     
@@ -411,6 +499,44 @@ export class RunnableManager extends EventEmitter<ManagerEvents> {
     // Emit event
     this.emit('output', id, line, stream);
     
+    // Check readyWhen
+    this.checkReadyWhen(id, line);
+  }
+  
+  /**
+   * Replace all output for a runnable (used by PTY screen refresh).
+   * This is for TUI programs that refresh the entire screen.
+   */
+  private replaceOutput(id: string, lines: string[]): void {
+    const instance = this.instances.get(id);
+    if (!instance) return;
+    
+    const buffers = this.outputBuffers.get(id);
+    if (!buffers) return;
+    
+    // Clear and replace
+    buffers.stdout.clear();
+    buffers.stderr.clear();
+    buffers.output.clear();
+    
+    for (const line of lines) {
+      buffers.stdout.push(line);
+      buffers.output.push(line);
+      // Emit output event for each line (for readyWhen detection and tests)
+      this.emit('output', id, line, 'stdout');
+    }
+    
+    // Check readyWhen with the full output
+    this.checkReadyWhen(id, '');
+  }
+  
+  /**
+   * Check readyWhen condition without adding to output buffer.
+   */
+  private checkReadyWhen(id: string, _newLine: string): void {
+    const instance = this.instances.get(id);
+    if (!instance) return;
+    
     // Check readyWhen immediately after new output
     if (instance.status === 'starting' && instance.definition.readyWhen) {
       const allOutput = this.getOutputLines(id, 'all').join('\n');
@@ -420,7 +546,6 @@ export class RunnableManager extends EventEmitter<ManagerEvents> {
         this.invokeOnReady(id).then(() => {
           this.setStatus(id, 'running');
         });
-        return; // Don't continue synchronously
       }
     }
   }

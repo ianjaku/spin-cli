@@ -1,0 +1,47 @@
+# Source code (dist/ contains compiled output)
+src/
+
+# Planning & internal docs
+planning/
+planning-v2/
+docs/
+todo.md
+AGENTS.md
+
+# Test files
+*.test.ts
+*.test.tsx
+coverage/
+vitest.config.ts
+
+# Build & dev configs
+tsconfig.json
+tsup.config.ts
+
+# Example/local configs
+spin.config.ts
+spin.config.example.ts
+
+# Lockfiles & workspace configs
+pnpm-lock.yaml
+pnpm-workspace.yaml
+bun.lock
+.pnpm-approve-builds.txt
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.*
+
+# Logs
+*.log
+npm-debug.log*
